@@ -15,10 +15,12 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
 locals {
   github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github_actions[0].arn
 
-  backend_task_definition_family_arn             = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project}-${var.environment}-app:*"
-  backend_performance_task_definition_family_arn = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project}-${var.environment}-performance-app:*"
-  backend_ecs_service_arn                        = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/${aws_ecs_service.app.name}"
-  backend_performance_ecs_service_arn            = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/${aws_ecs_service.performance_app.name}"
+  backend_task_definition_family_arn                    = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project}-${var.environment}-app:*"
+  backend_performance_task_definition_family_arn        = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project}-${var.environment}-performance-app:*"
+  backend_performance_worker_task_definition_family_arn = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project}-${var.environment}-performance-worker:*"
+  backend_ecs_service_arn                               = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/${aws_ecs_service.app.name}"
+  backend_performance_ecs_service_arn                   = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/${aws_ecs_service.performance_app.name}"
+  backend_performance_worker_ecs_service_arn            = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/${aws_ecs_service.performance_worker.name}"
 }
 
 data "aws_partition" "current" {}
@@ -297,29 +299,41 @@ data "aws_iam_policy_document" "backend_performance_github_actions_deploy" {
   }
 
   statement {
-    sid       = "RegisterPerformanceTaskDefinition"
-    effect    = "Allow"
-    actions   = ["ecs:RegisterTaskDefinition"]
-    resources = [local.backend_performance_task_definition_family_arn]
+    sid     = "RegisterPerformanceTaskDefinition"
+    effect  = "Allow"
+    actions = ["ecs:RegisterTaskDefinition"]
+    resources = [
+      local.backend_performance_task_definition_family_arn,
+      local.backend_performance_worker_task_definition_family_arn,
+    ]
   }
 
   statement {
-    sid       = "DescribePerformanceService"
-    effect    = "Allow"
-    actions   = ["ecs:DescribeServices"]
-    resources = [local.backend_performance_ecs_service_arn]
+    sid     = "DescribePerformanceService"
+    effect  = "Allow"
+    actions = ["ecs:DescribeServices"]
+    resources = [
+      local.backend_performance_ecs_service_arn,
+      local.backend_performance_worker_ecs_service_arn,
+    ]
   }
 
   statement {
-    sid       = "UpdatePerformanceService"
-    effect    = "Allow"
-    actions   = ["ecs:UpdateService"]
-    resources = [local.backend_performance_ecs_service_arn]
+    sid     = "UpdatePerformanceService"
+    effect  = "Allow"
+    actions = ["ecs:UpdateService"]
+    resources = [
+      local.backend_performance_ecs_service_arn,
+      local.backend_performance_worker_ecs_service_arn,
+    ]
 
     condition {
       test     = "ArnLike"
       variable = "ecs:task-definition"
-      values   = [local.backend_performance_task_definition_family_arn]
+      values = [
+        local.backend_performance_task_definition_family_arn,
+        local.backend_performance_worker_task_definition_family_arn,
+      ]
     }
   }
 

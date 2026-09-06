@@ -61,19 +61,21 @@ Performance Task Definition과 같은 512 CPU units / 1024 MiB이며, 실제 최
 Profile/Workload 값이 아니라 AWS에 적용된 active Performance Task Definition의
 `ecs.task_cpu`와 `ecs.task_memory`를 기록한다.
 
-Performance 실험에서 변경하는 WorkItems worker concurrency와 ECS task count도 Terraform
-입력으로 명시한다. `performance_worker_work_items_concurrency`는
-`GUARDBENCH_WORKER_WORK_ITEMS_CONCURRENCY` 환경변수로 Performance Backend container에
-주입되며, `performance_app_desired_count`는 해당 ECS Service의 desired task 수를
-제어한다. Runner Profile의 `concurrent_test_runs`는 별도 실험축이며 이 두 입력과
-혼동하지 않는다. Dev Backend의 concurrency와 task count는 이 입력의 영향을 받지 않는다.
+Performance 실험에서 변경하는 WorkItems worker concurrency와 API/Worker ECS task count도
+Terraform 입력으로 명시한다. `performance_worker_work_items_concurrency`는
+`GUARDBENCH_WORKER_WORK_ITEMS_CONCURRENCY` 환경변수로 Performance API/Worker container에
+주입되며, `performance_api_desired_count`와 `performance_worker_desired_count`는 각각
+역할별 ECS Service의 desired task 수를 제어한다. Runner Profile의
+`concurrent_test_runs`는 별도 실험축이며 이 입력들과 혼동하지 않는다. Dev Backend의
+concurrency와 task count는 이 입력의 영향을 받지 않는다.
 
 예를 들어 WorkItems concurrency 4를 단일 task에서 측정하려면 다음처럼 Performance 전용
 값만 지정한다.
 
 ```hcl
 performance_worker_work_items_concurrency = 4
-performance_app_desired_count              = 1
+performance_api_desired_count              = 1
+performance_worker_desired_count           = 4
 ```
 
 `terraform plan`에서 Performance Task Definition의 환경변수와 Performance Service의
@@ -152,12 +154,14 @@ Performance RDS는 같은 명령에서 `performance_rds_endpoint` output과 다�
 
 ## Performance Backend application revision ownership
 
-`aws_ecs_task_definition.performance_app`은 Terraform이 만드는 bootstrap/infrastructure
-Task Definition이다. CPU·memory, environment/secrets, IAM, networking, logging을 변경하면
-Terraform이 새 bootstrap revision을 등록하지만, `aws_ecs_service.performance_app`의
-`task_definition`은 Backend CI가 소유한다. Terraform에는 해당 속성의 `ignore_changes`가
-설정되어 있으므로 Backend CI가 배포한 application revision을 다음 Terraform apply가
-bootstrap revision으로 되돌리지 않는다.
+`aws_ecs_task_definition.performance_app`와
+`aws_ecs_task_definition.performance_worker`는 Terraform이 만드는 역할별
+bootstrap/infrastructure Task Definition이다. CPU·memory, environment/secrets, IAM,
+networking, logging을 변경하면 Terraform이 새 bootstrap revision을 등록하지만,
+`aws_ecs_service.performance_app`와 `aws_ecs_service.performance_worker`의
+`task_definition`은 Backend CI가 소유한다. Terraform에는 해당 속성의
+`ignore_changes`가 설정되어 있으므로 Backend CI가 배포한 application revision을 다음
+Terraform apply가 bootstrap revision으로 되돌리지 않는다.
 
 Backend CI는 Terraform이 제공한 Performance task-definition family의 최신 `ACTIVE`
 revision을 base로 읽고, `app` container의 immutable Git SHA image만 교체해 새 revision을
@@ -167,25 +171,33 @@ revision을 base로 읽고, `app` container의 immutable Git SHA image만 교체
 ```bash
 terraform output -raw performance_ecs_cluster_name
 terraform output -raw performance_ecs_service_name
+terraform output -raw performance_worker_ecs_service_name
 terraform output -raw performance_ecs_container_name
 terraform output -raw performance_ecs_task_definition_family
 terraform output -raw performance_ecs_task_definition_arn
+terraform output -raw performance_worker_ecs_task_definition_family
+terraform output -raw performance_worker_ecs_task_definition_arn
 ```
 
-각 값은 각각 `ECS_CLUSTER`, `ECS_SERVICE`, `ECS_CONTAINER_NAME`,
-`ECS_TASK_DEFINITION_FAMILY`와 bootstrap 기준 revision에 매핑한다. Performance 배포용
+API output은 기존 Backend CI의 `ECS_SERVICE`/`ECS_TASK_DEFINITION_FAMILY` 계약을
+유지한다. Worker output은 Worker service를 별도로 배포할 때 사용한다. Performance 배포용
 GitHub Actions environment/variables는 Backend #199의 이름을 사용하고, Dev service 변수와
-섞지 않는다. Performance service가 `desired_count = 0`인 상태에서도 revision 등록은
-가능하지만 실제 smoke/load 실행 전에는 service와 dependency(RDS, queue, SageMaker 등)를
-별도로 활성화해야 한다.
+섞지 않는다. Performance API/Worker service가 `desired_count = 0`인 상태에서도 revision
+등록은 가능하지만 실제 smoke/load 실행 전에는 두 service와 dependency(RDS, queue,
+SageMaker 등)를 별도로 활성화해야 한다.
 
 ## Dev/Performance 동시 실행
 
-Dev Backend service(`guardbench-dev-app`)는 public ALB와 Dev RDS/queue를 사용한다. Performance Backend service(`guardbench-dev-performance-app`)는 performance internal ALB와 Performance RDS/queue를 사용한다. Performance service를 켜려면 다음 변수를 설정한다.
+Dev Backend service(`guardbench-dev-app`)는 public ALB와 Dev RDS/queue를 사용한다.
+Performance API service(`guardbench-dev-performance-app`)는 performance internal ALB와
+Performance RDS/queue를 사용하고, Performance Worker service
+(`guardbench-dev-performance-worker`)는 ALB에 등록되지 않은 채 같은 Performance
+RDS/queue를 사용한다. Performance services를 켜려면 다음 변수를 설정한다.
 
 ```hcl
 performance_app_enabled       = true
-performance_app_desired_count = 1
+performance_api_desired_count    = 1
+performance_worker_desired_count = 4
 performance_runner_enabled    = true
 ```
 
