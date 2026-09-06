@@ -32,6 +32,16 @@ resource "aws_security_group_rule" "performance_api_alb_ingress_from_api" {
   security_group_id        = aws_security_group.performance_api_alb.id
 }
 
+resource "aws_security_group_rule" "performance_api_alb_ingress_from_worker" {
+  type                     = "ingress"
+  from_port                = 80
+  to_port                  = 80
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.worker.id
+  description              = "Performance Worker target calls through the internal ALB"
+  security_group_id        = aws_security_group.performance_api_alb.id
+}
+
 resource "aws_security_group_rule" "performance_api_alb_egress_to_api" {
   type                     = "egress"
   from_port                = var.api_container_port

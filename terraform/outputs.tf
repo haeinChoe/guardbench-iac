@@ -116,8 +116,13 @@ output "ecs_task_definition_arn" {
 }
 
 output "performance_ecs_service_name" {
-  description = "Dedicated performance application ECS service name"
+  description = "Dedicated Performance API ECS service name"
   value       = aws_ecs_service.performance_app.name
+}
+
+output "performance_worker_ecs_service_name" {
+  description = "Dedicated Performance Worker ECS service name"
+  value       = aws_ecs_service.performance_worker.name
 }
 
 output "performance_ecs_cluster_name" {
@@ -131,13 +136,23 @@ output "performance_ecs_container_name" {
 }
 
 output "performance_ecs_task_definition_family" {
-  description = "Dedicated performance application ECS task definition family"
+  description = "Dedicated Performance API ECS task definition family"
   value       = aws_ecs_task_definition.performance_app.family
 }
 
 output "performance_ecs_task_definition_arn" {
-  description = "Terraform-managed bootstrap task definition ARN for Performance Backend"
+  description = "Terraform-managed bootstrap task definition ARN for Performance API"
   value       = aws_ecs_task_definition.performance_app.arn
+}
+
+output "performance_worker_ecs_task_definition_family" {
+  description = "Dedicated Performance Worker ECS task definition family"
+  value       = aws_ecs_task_definition.performance_worker.family
+}
+
+output "performance_worker_ecs_task_definition_arn" {
+  description = "Terraform-managed bootstrap task definition ARN for Performance Worker"
+  value       = aws_ecs_task_definition.performance_worker.arn
 }
 
 output "performance_worker_work_items_concurrency" {
@@ -145,9 +160,14 @@ output "performance_worker_work_items_concurrency" {
   value       = var.performance_worker_work_items_concurrency
 }
 
-output "performance_app_desired_count" {
-  description = "Explicit Performance Backend ECS desired task count input"
-  value       = var.performance_app_desired_count
+output "performance_api_desired_count" {
+  description = "Explicit Performance API ECS desired task count input"
+  value       = var.performance_api_desired_count
+}
+
+output "performance_worker_desired_count" {
+  description = "Explicit Performance Worker ECS desired task count input"
+  value       = var.performance_worker_desired_count
 }
 
 output "ecr_repository_url" {

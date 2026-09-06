@@ -102,7 +102,7 @@ variable "performance_api_memory" {
 }
 
 variable "backend_service_desired_counts" {
-  description = "Desired task counts keyed by backend ECS service role; app is the current combined service and api/worker are available for the future split"
+  description = "Desired task counts keyed by development backend ECS service role"
   type        = map(number)
   default     = {}
 
@@ -121,14 +121,25 @@ variable "performance_app_enabled" {
   default     = false
 }
 
-variable "performance_app_desired_count" {
-  description = "Explicit Performance Backend ECS task count for an experiment; concurrent TestRuns remain a Runner/Profile setting"
+variable "performance_api_desired_count" {
+  description = "Desired task count for the Performance API ECS service"
   type        = number
   default     = 1
 
   validation {
-    condition     = var.performance_app_desired_count >= 0 && var.performance_app_desired_count == floor(var.performance_app_desired_count)
-    error_message = "performance_app_desired_count must be a non-negative whole number."
+    condition     = var.performance_api_desired_count >= 0 && var.performance_api_desired_count == floor(var.performance_api_desired_count)
+    error_message = "performance_api_desired_count must be a non-negative whole number."
+  }
+}
+
+variable "performance_worker_desired_count" {
+  description = "Desired task count for the Performance Worker ECS service"
+  type        = number
+  default     = 4
+
+  validation {
+    condition     = var.performance_worker_desired_count >= 0 && var.performance_worker_desired_count == floor(var.performance_worker_desired_count)
+    error_message = "performance_worker_desired_count must be a non-negative whole number."
   }
 }
 

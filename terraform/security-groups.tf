@@ -119,6 +119,16 @@ resource "aws_security_group_rule" "api_egress_to_performance_alb" {
   security_group_id        = aws_security_group.api.id
 }
 
+resource "aws_security_group_rule" "worker_egress_to_performance_alb" {
+  type                     = "egress"
+  from_port                = 80
+  to_port                  = 80
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.performance_api_alb.id
+  description              = "Performance Worker target calls through the internal ALB"
+  security_group_id        = aws_security_group.worker.id
+}
+
 # ============================================
 # Worker Security Group (Orchestrator + Executor)
 # ============================================
@@ -198,6 +208,16 @@ resource "aws_security_group_rule" "performance_rds_ingress_from_api" {
   protocol                 = "tcp"
   source_security_group_id = aws_security_group.api.id
   description              = "From Backend ECS services"
+  security_group_id        = aws_security_group.performance_rds.id
+}
+
+resource "aws_security_group_rule" "performance_rds_ingress_from_worker" {
+  type                     = "ingress"
+  from_port                = var.db_port
+  to_port                  = var.db_port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.worker.id
+  description              = "From Performance Worker service"
   security_group_id        = aws_security_group.performance_rds.id
 }
 
@@ -317,6 +337,7 @@ resource "aws_security_group" "vpc_endpoints" {
     protocol    = "tcp"
     security_groups = [
       aws_security_group.api.id,
+      aws_security_group.worker.id,
       aws_security_group.performance_runner.id,
       aws_security_group.demo_ai.id,
       aws_security_group.db_access.id,
