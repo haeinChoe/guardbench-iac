@@ -62,6 +62,7 @@ locals {
 
   backend_performance_container = merge(local.backend_container_base, {
     environment = concat(local.backend_common_environment, [
+      { name = "GUARDBENCH_WORKER_WORK_ITEMS_CONCURRENCY", value = tostring(var.performance_worker_work_items_concurrency) },
       { name = "SPRING_DATASOURCE_URL", value = "jdbc:postgresql://${aws_db_instance.performance.address}:${var.db_port}/guardbench_perf?sslmode=require" },
       { name = "GUARDBENCH_SQS_QUEUE_URLS_RESOLVE", value = aws_sqs_queue.performance_source["gb-run-resolve"].url },
       { name = "GUARDBENCH_SQS_QUEUE_URLS_WORK_ITEMS", value = aws_sqs_queue.performance_source["gb-workitems"].url },

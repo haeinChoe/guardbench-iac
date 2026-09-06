@@ -122,13 +122,24 @@ variable "performance_app_enabled" {
 }
 
 variable "performance_app_desired_count" {
-  description = "Number of Performance Backend tasks when the service is enabled"
+  description = "Explicit Performance Backend ECS task count for an experiment; concurrent TestRuns remain a Runner/Profile setting"
   type        = number
   default     = 1
 
   validation {
-    condition     = var.performance_app_desired_count >= 0
-    error_message = "performance_app_desired_count must be zero or greater."
+    condition     = var.performance_app_desired_count >= 0 && var.performance_app_desired_count == floor(var.performance_app_desired_count)
+    error_message = "performance_app_desired_count must be a non-negative whole number."
+  }
+}
+
+variable "performance_worker_work_items_concurrency" {
+  description = "WorkItems worker concurrency for the Performance Backend; record this explicit experiment input separately from ECS task count and Runner concurrent TestRuns"
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.performance_worker_work_items_concurrency >= 1 && var.performance_worker_work_items_concurrency == floor(var.performance_worker_work_items_concurrency)
+    error_message = "performance_worker_work_items_concurrency must be a positive whole number."
   }
 }
 
