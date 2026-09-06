@@ -164,6 +164,16 @@ resource "aws_security_group_rule" "worker_egress_to_rds" {
   security_group_id        = aws_security_group.worker.id
 }
 
+resource "aws_security_group_rule" "worker_egress_to_performance_rds" {
+  type                     = "egress"
+  from_port                = var.db_port
+  to_port                  = var.db_port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.performance_rds.id
+  description              = "To performance-test RDS PostgreSQL"
+  security_group_id        = aws_security_group.worker.id
+}
+
 # ============================================
 # RDS Security Group
 # ============================================
