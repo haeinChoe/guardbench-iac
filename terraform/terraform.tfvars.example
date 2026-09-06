@@ -66,6 +66,11 @@ performance_app_desired_count = 1
 performance_api_cpu    = 512
 performance_api_memory = 1024
 
+# Performance experiment inputs. WorkItem concurrency is injected into the
+# Performance Backend Task Definition; concurrent TestRuns remain a Runner
+# Profile setting. Keep the ECS task count explicit and separate.
+performance_worker_work_items_concurrency = 1
+
 # Performance RDS is an isolated, fixed dependency for MVP performance tests.
 # Keep its configured values stable; record them for reproducibility and observe
 # CloudWatch metrics for bottleneck detection. Capacity sweep/tuning is out of scope.

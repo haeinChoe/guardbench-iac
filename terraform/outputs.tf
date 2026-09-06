@@ -140,6 +140,16 @@ output "performance_ecs_task_definition_arn" {
   value       = aws_ecs_task_definition.performance_app.arn
 }
 
+output "performance_worker_work_items_concurrency" {
+  description = "WorkItems concurrency configured for the Performance Backend Task Definition"
+  value       = var.performance_worker_work_items_concurrency
+}
+
+output "performance_app_desired_count" {
+  description = "Explicit Performance Backend ECS desired task count input"
+  value       = var.performance_app_desired_count
+}
+
 output "ecr_repository_url" {
   description = "ECR repository URL (push images here)"
   value       = aws_ecr_repository.app.repository_url

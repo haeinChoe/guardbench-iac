@@ -61,6 +61,25 @@ Performance Task Definition과 같은 512 CPU units / 1024 MiB이며, 실제 최
 Profile/Workload 값이 아니라 AWS에 적용된 active Performance Task Definition의
 `ecs.task_cpu`와 `ecs.task_memory`를 기록한다.
 
+Performance 실험에서 변경하는 WorkItems worker concurrency와 ECS task count도 Terraform
+입력으로 명시한다. `performance_worker_work_items_concurrency`는
+`GUARDBENCH_WORKER_WORK_ITEMS_CONCURRENCY` 환경변수로 Performance Backend container에
+주입되며, `performance_app_desired_count`는 해당 ECS Service의 desired task 수를
+제어한다. Runner Profile의 `concurrent_test_runs`는 별도 실험축이며 이 두 입력과
+혼동하지 않는다. Dev Backend의 concurrency와 task count는 이 입력의 영향을 받지 않는다.
+
+예를 들어 WorkItems concurrency 4를 단일 task에서 측정하려면 다음처럼 Performance 전용
+값만 지정한다.
+
+```hcl
+performance_worker_work_items_concurrency = 4
+performance_app_desired_count              = 1
+```
+
+`terraform plan`에서 Performance Task Definition의 환경변수와 Performance Service의
+desired count 변경만 의도한 대로 포함되는지 확인한다. `concurrent_test_runs`는 Smoke
+Profile에서 설정하며 Terraform 입력으로 관리하지 않는다.
+
 ```hcl
 performance_api_cpu    = 1024
 performance_api_memory = 2048
