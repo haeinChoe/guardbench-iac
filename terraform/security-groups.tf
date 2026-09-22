@@ -197,6 +197,16 @@ resource "aws_security_group_rule" "rds_ingress_from_api" {
   security_group_id        = aws_security_group.rds.id
 }
 
+resource "aws_security_group_rule" "rds_ingress_from_worker" {
+  type                     = "ingress"
+  from_port                = var.db_port
+  to_port                  = var.db_port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.worker.id
+  description              = "From Worker service"
+  security_group_id        = aws_security_group.rds.id
+}
+
 # ============================================
 # Performance RDS Security Group
 # ============================================

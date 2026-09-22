@@ -1,11 +1,10 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  # Keep all backend service capacity inputs in one map for the development
-  # service. Performance API/Worker capacity is managed by role-specific
-  # inputs below.
+  # Keep development API/Worker capacity inputs in one map. The existing app
+  # service remains the API service, while worker is an additive service.
   backend_service_desired_counts = merge(
-    { app = 1 },
+    { app = 1, worker = var.dev_worker_min_capacity },
     var.backend_service_desired_counts,
   )
 
@@ -33,18 +32,11 @@ locals {
   backend_dev_container = merge(local.backend_container_base, {
     environment = concat(local.backend_common_environment, [
       { name = "SQS_ENABLED", value = "true" },
-      { name = "WORKER_ENABLED", value = "true" },
+      { name = "WORKER_ENABLED", value = "false" },
       { name = "SPRING_DATASOURCE_URL", value = "jdbc:postgresql://${aws_db_instance.app.address}:${var.db_port}/guardbench?sslmode=require" },
       { name = "GUARDBENCH_SQS_QUEUE_URLS_RESOLVE", value = aws_sqs_queue.source["gb-run-resolve"].url },
       { name = "GUARDBENCH_SQS_QUEUE_URLS_WORK_ITEMS", value = aws_sqs_queue.source["gb-workitems"].url },
       { name = "GUARDBENCH_SQS_QUEUE_URLS_RUN_FINALIZE", value = aws_sqs_queue.source["gb-run-finalize"].url },
-      {
-        name = "SPRING_APPLICATION_JSON"
-        value = jsonencode({
-          "guardbench.http-endpoint.allow-private-addresses"   = false
-          "guardbench.http-endpoint.allowed-private-hostnames" = [aws_lb.performance_api.dns_name]
-        })
-      },
     ])
     secrets = [
       { name = "SPRING_DATASOURCE_USERNAME", valueFrom = "${aws_db_instance.app.master_user_secret[0].secret_arn}:username::" },
@@ -87,6 +79,32 @@ locals {
         "awslogs-group"         = aws_cloudwatch_log_group.performance_app.name
         "awslogs-region"        = var.aws_region
         "awslogs-stream-prefix" = "performance-app"
+      }
+    }
+  })
+
+  backend_dev_worker_container = merge(local.backend_container_base, {
+    # Worker tasks poll SQS and are not registered with the public ALB.
+    portMappings = []
+    environment = concat(local.backend_common_environment, [
+      { name = "SQS_ENABLED", value = "true" },
+      { name = "WORKER_ENABLED", value = "true" },
+      { name = "GUARDBENCH_WORKER_WORK_ITEMS_CONCURRENCY", value = tostring(var.dev_worker_work_items_concurrency) },
+      { name = "SPRING_DATASOURCE_URL", value = "jdbc:postgresql://${aws_db_instance.app.address}:${var.db_port}/guardbench?sslmode=require" },
+      { name = "GUARDBENCH_SQS_QUEUE_URLS_RESOLVE", value = aws_sqs_queue.source["gb-run-resolve"].url },
+      { name = "GUARDBENCH_SQS_QUEUE_URLS_WORK_ITEMS", value = aws_sqs_queue.source["gb-workitems"].url },
+      { name = "GUARDBENCH_SQS_QUEUE_URLS_RUN_FINALIZE", value = aws_sqs_queue.source["gb-run-finalize"].url },
+    ])
+    secrets = [
+      { name = "SPRING_DATASOURCE_USERNAME", valueFrom = "${aws_db_instance.app.master_user_secret[0].secret_arn}:username::" },
+      { name = "SPRING_DATASOURCE_PASSWORD", valueFrom = "${aws_db_instance.app.master_user_secret[0].secret_arn}:password::" },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.app.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "worker"
       }
     }
   })
@@ -261,6 +279,29 @@ resource "aws_ecs_task_definition" "app" {
   container_definitions = jsonencode([local.backend_dev_container])
 }
 
+resource "aws_ecs_task_definition" "worker" {
+  family                   = "${var.project}-${var.environment}-worker"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = var.api_cpu
+  memory                   = var.api_memory
+
+  runtime_platform {
+    cpu_architecture        = "X86_64"
+    operating_system_family = "LINUX"
+  }
+
+  execution_role_arn = aws_iam_role.ecs_task_execution.arn
+  task_role_arn      = aws_iam_role.app_task.arn
+
+  container_definitions = jsonencode([local.backend_dev_worker_container])
+
+  tags = {
+    Name = "${var.project}-${var.environment}-worker"
+    Role = "worker"
+  }
+}
+
 resource "aws_ecs_task_definition" "performance_app" {
   family                   = "${var.project}-${var.environment}-performance-app"
   network_mode             = "awsvpc"
@@ -347,6 +388,36 @@ resource "aws_ecs_service" "app" {
   }
 
   depends_on = [aws_lb_listener.http]
+}
+
+resource "aws_ecs_service" "worker" {
+  name                   = "${var.project}-${var.environment}-worker"
+  cluster                = aws_ecs_cluster.main.id
+  task_definition        = aws_ecs_task_definition.worker.arn
+  desired_count          = local.backend_service_desired_counts["worker"]
+  launch_type            = "FARGATE"
+  enable_execute_command = true
+
+  # Backend CI owns application task-definition revisions after the bootstrap
+  # revision created by Terraform. Keep infrastructure shape and deployment
+  # ownership separate so apply cannot roll back an application deployment.
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+
+  network_configuration {
+    subnets          = aws_subnet.private[*].id
+    security_groups  = [aws_security_group.worker.id]
+    assign_public_ip = false
+  }
+
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 }
 
 resource "aws_ecs_service" "performance_app" {

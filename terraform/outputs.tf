@@ -115,6 +115,36 @@ output "ecs_task_definition_arn" {
   value       = aws_ecs_task_definition.app.arn
 }
 
+output "ecs_worker_service_name" {
+  description = "Development Worker ECS service name"
+  value       = aws_ecs_service.worker.name
+}
+
+output "ecs_worker_task_definition_family" {
+  description = "Development Worker ECS task definition family"
+  value       = aws_ecs_task_definition.worker.family
+}
+
+output "ecs_worker_task_definition_arn" {
+  description = "Terraform-managed baseline task definition ARN for the development Worker"
+  value       = aws_ecs_task_definition.worker.arn
+}
+
+output "dev_worker_min_capacity" {
+  description = "Minimum development Worker ECS task count"
+  value       = var.dev_worker_min_capacity
+}
+
+output "dev_worker_max_capacity" {
+  description = "Maximum development Worker ECS task count"
+  value       = var.dev_worker_max_capacity
+}
+
+output "dev_worker_work_items_concurrency" {
+  description = "WorkItems concurrency configured for each development Worker task"
+  value       = var.dev_worker_work_items_concurrency
+}
+
 output "performance_ecs_service_name" {
   description = "Dedicated Performance API ECS service name"
   value       = aws_ecs_service.performance_app.name

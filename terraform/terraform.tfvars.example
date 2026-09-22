@@ -14,14 +14,16 @@ vpc_cidr             = "10.1.0.0/16"
 public_subnet_cidrs  = ["10.1.1.0/24", "10.1.2.0/24"]
 private_subnet_cidrs = ["10.1.10.0/24", "10.1.20.0/24"]
 
-# Backend ECS service capacity. The current app service runs API and worker
-# together. Add independent api/worker values when those services are split;
-# the same input block can then be reused for performance experiments.
+# Development Backend ECS service capacity. The existing app service remains
+# the API service; the Worker starts at its autoscaling minimum.
 backend_service_desired_counts = {
-  app = 1
-  # api    = 2
-  # worker = 1
+  app    = 1
+  worker = 2
 }
+
+dev_worker_min_capacity              = 2
+dev_worker_max_capacity              = 4
+dev_worker_work_items_concurrency   = 8
 
 # 검증된 backend commit SHA로 바꿔 사용합니다. latest tag는 허용하지 않습니다.
 app_image_tag = "0123456789abcdef0123456789abcdef01234567"
