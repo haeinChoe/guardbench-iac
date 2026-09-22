@@ -132,6 +132,46 @@ variable "performance_api_desired_count" {
   }
 }
 
+variable "dev_worker_min_capacity" {
+  description = "Minimum development Worker ECS task count"
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.dev_worker_min_capacity >= 1 && var.dev_worker_min_capacity == floor(var.dev_worker_min_capacity)
+    error_message = "dev_worker_min_capacity must be a positive whole number."
+  }
+}
+
+variable "dev_worker_max_capacity" {
+  description = "Maximum development Worker ECS task count"
+  type        = number
+  default     = 4
+
+  validation {
+    condition     = var.dev_worker_max_capacity >= 1 && var.dev_worker_max_capacity == floor(var.dev_worker_max_capacity) && var.dev_worker_max_capacity <= 4
+    error_message = "dev_worker_max_capacity must be a whole number from 1 through 4."
+  }
+}
+
+variable "dev_worker_work_items_concurrency" {
+  description = "WorkItems concurrency per development Worker ECS task"
+  type        = number
+  default     = 8
+
+  validation {
+    condition     = var.dev_worker_work_items_concurrency >= 1 && var.dev_worker_work_items_concurrency == floor(var.dev_worker_work_items_concurrency) && var.dev_worker_work_items_concurrency <= 8
+    error_message = "dev_worker_work_items_concurrency must be a whole number from 1 through 8."
+  }
+}
+
+check "dev_worker_capacity_contract" {
+  assert {
+    condition     = var.dev_worker_min_capacity <= var.dev_worker_max_capacity && local.backend_service_desired_counts["worker"] >= var.dev_worker_min_capacity && local.backend_service_desired_counts["worker"] <= var.dev_worker_max_capacity
+    error_message = "The development Worker desired count must stay between its configured min and max capacity."
+  }
+}
+
 variable "performance_worker_desired_count" {
   description = "Desired task count for the Performance Worker ECS service"
   type        = number

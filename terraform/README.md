@@ -25,33 +25,31 @@ terraform import aws_lb.main arn:aws:elasticloadbalancing:...
 terraform import aws_cloudfront_distribution.frontend DISTRIBUTION_ID
 ```
 
-## Backend ECS capacity 실험
+## Backend ECS capacity
 
-Backend ECS task 수는 `backend_service_desired_counts` 한 곳에서 서비스 역할별로 관리한다. 현재는 API와 worker가 `guardbench-dev-app` 하나의 결합 서비스에서 실행되므로 `app` 값이 해당 서비스의 `desired_count`를 제어한다. API/worker 서비스가 분리되면 같은 입력에 `api`와 `worker` 값을 추가하고 각 서비스가 해당 키를 사용하도록 확장한다. 이 작업은 역할별 최적 task 수를 결정하지 않는다.
+개발 Backend는 `guardbench-dev-app` API service와 `guardbench-dev-worker` Worker service로 분리되어 있다. API는 ALB 뒤에서 desired 1로 실행되고 `WORKER_ENABLED=false`를 사용한다. Worker는 ALB에 등록하지 않으며 `WORKER_ENABLED=true`와 `GUARDBENCH_WORKER_WORK_ITEMS_CONCURRENCY=8`을 사용한다. Worker desired count는 `backend_service_desired_counts.worker`로 초기값을 지정하고 Application Auto Scaling이 2~4 범위에서 SQS work-items pressure에 따라 조정한다.
 
-성능 테스트에서 결합된 현재 서비스를 2개로 바꾸려면 `terraform.tfvars`의 입력만 변경한다.
-
-```hcl
-backend_service_desired_counts = {
-  app = 2
-}
-```
-
-역할 분리 이후에는 다음처럼 각 서비스의 capacity 조합을 반복해서 측정할 수 있다.
+기본 dev capacity는 다음과 같다.
 
 ```hcl
 backend_service_desired_counts = {
-  api    = 2
-  worker = 4
+  app    = 1
+  worker = 2
 }
+
+dev_worker_min_capacity            = 2
+dev_worker_max_capacity            = 4
+dev_worker_work_items_concurrency = 8
 ```
 
-```bash
-terraform plan -var='backend_service_desired_counts={app=2}'
-terraform apply
-```
+Worker scale-out은 `gb-workitems`의 `ApproximateNumberOfMessagesVisible` 64개 이상 또는 `ApproximateAgeOfOldestMessage` 20초 이상일 때 한 task씩 수행한다. Scale-in은 두 공식 metric이 각각 8개 이하와 0 상태를 10분 유지할 때 한 task씩 수행하며, min 2를 유지한다. SQS age metric이 비어 있으면 scale-in alarm은 breaching으로 처리하지 않아 보수적으로 유지된다.
 
-현재 결합 서비스의 `app` 값 변경은 `aws_ecs_service.app`의 `desired_count`만 갱신하며 task definition이나 다른 서비스의 capacity를 변경하지 않는다. `terraform plan`에서 이 변경이 의도한 ECS Service update인지 확인한 뒤 apply한다.
+성능 환경 capacity는 별도 입력으로 관리하며 dev Worker Auto Scaling과 섞지 않는다.
+
+```hcl
+performance_api_desired_count    = 1
+performance_worker_desired_count = 4
+```
 
 Performance Backend의 Infrastructure Capacity는 Dev API와 독립된
 `performance_api_cpu`/`performance_api_memory` 입력으로 관리한다. 기본값은 기존
