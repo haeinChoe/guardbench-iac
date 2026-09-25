@@ -64,6 +64,7 @@ resource "aws_iam_role_policy" "sagemaker_execution" {
 }
 
 resource "aws_sagemaker_model" "classifier" {
+  count              = var.sagemaker_classifier_endpoint_enabled ? 1 : 0
   name               = local.sagemaker_classifier_name
   execution_role_arn = aws_iam_role.sagemaker_execution.arn
 
@@ -108,11 +109,13 @@ resource "aws_sagemaker_model" "classifier" {
 }
 
 resource "aws_sagemaker_endpoint_configuration" "classifier" {
+  count = var.sagemaker_classifier_endpoint_enabled ? 1 : 0
+
   name = "guardbench-qwen3-4b-config"
 
   production_variants {
     variant_name           = "AllTraffic"
-    model_name             = aws_sagemaker_model.classifier.name
+    model_name             = aws_sagemaker_model.classifier[0].name
     initial_instance_count = 1
     initial_variant_weight = 1.0
     instance_type          = "ml.g5.xlarge"
@@ -123,5 +126,5 @@ resource "aws_sagemaker_endpoint" "classifier" {
   count = var.sagemaker_classifier_endpoint_enabled ? 1 : 0
 
   name                 = local.sagemaker_classifier_endpoint_name
-  endpoint_config_name = aws_sagemaker_endpoint_configuration.classifier.name
+  endpoint_config_name = aws_sagemaker_endpoint_configuration.classifier[0].name
 }

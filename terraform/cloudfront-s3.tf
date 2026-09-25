@@ -99,8 +99,8 @@ resource "aws_cloudfront_function" "spa_rewrite" {
 
 # --- CloudFront Distribution ---
 resource "aws_cloudfront_distribution" "frontend" {
-  # Keep the distribution disabled until the frontend is ready for manual activation.
-  enabled             = false
+  # Keep the development frontend reachable for integration testing.
+  enabled             = true
   is_ipv6_enabled     = true
   default_root_object = var.spa_index_document
   comment             = "GuardBench ${var.environment} frontend"
