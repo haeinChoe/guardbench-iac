@@ -1,0 +1,81 @@
+name: Decision
+description: 구현 전에 필요한 인프라 설계 결정과 승인 근거를 준비합니다.
+title: "[Decision] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        제안은 승인된 계약이나 구현 권한이 아닙니다. 결정은 필요할 때 ADR 또는 승인된 IaC 문서로 기록합니다.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 배경과 문제
+      description: 어떤 운영 문제와 제약 때문에 지금 결정이 필요한지 적어주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: contracts
+    attributes:
+      label: 관련 계약과 선행 결정
+      description: Terraform 파일, README, 승인된 Issue/PR과 Backend 연동 계약을 적습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: drivers
+    attributes:
+      label: 결정 기준과 제약
+      description: 보안, 비용, 가용성, 운영 복잡도, State lifecycle과 rollback 등 평가 기준을 적어주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: options
+    attributes:
+      label: 선택지와 장단점
+      description: 현실적인 대안을 둘 이상 비교하고 아무것도 바꾸지 않는 선택도 포함해 주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 제안과 근거
+      description: 권장 선택, 변경 범위, Non-Goals와 핵심 근거를 적어주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: 영향, 검증과 되돌리기
+      description: Plan, State, AWS 비용과 운영 영향, 성공 기준 및 rollback 방법을 적습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: 미결정 사항과 필요한 승인자
+      description: 추가 조사, 선행 결정, 결정권자와 목표 시점을 적습니다. 없으면 "없음"으로 작성합니다.
+    validations:
+      required: true
+
+  - type: input
+    id: branch_slug
+    attributes:
+      label: 브랜치 slug
+      description: 결정 승인 후 agent/{issue-number}-{slug} 브랜치 이름에 사용합니다.
+      placeholder: choose-runner-execution-path
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: decision_boundary
+    attributes:
+      label: 결정 경계 확인
+      options:
+        - label: 승인 전에는 확정된 인프라 계약으로 사용하지 않고 구현과 분리해 기록합니다.
+          required: true

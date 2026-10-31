@@ -1,0 +1,108 @@
+name: Feature
+description: 승인 가능한 IaC 요구사항과 완료 조건으로 기능 작업을 정의합니다.
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        목적과 완료 조건을 구체적으로 작성합니다. DRAFT나 미결정에 따라 운영 동작이 달라지면 먼저 결정을 기록합니다.
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 목적
+      description: 어떤 인프라 결과를 제공하며 왜 필요한지 적어주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: contracts
+    attributes:
+      label: 관련 계약과 현재 구성
+      description: Terraform 파일, README, Backend 연동 계약과 승인된 GitHub Issue/PR을 적습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 구현 범위
+      description: 변경할 AWS resource, IAM, network, variable, output 또는 workflow를 적습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-Goals
+      description: 구현하지 않을 인접 인프라, 리팩터링과 운영 작업을 적어주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 완료 조건과 검증
+      placeholder: |
+        - [ ] terraform fmt -check와 terraform validate가 통과한다.
+        - [ ] plan의 add/change/destroy가 요구사항과 일치한다.
+        - [ ] State, 교체, 비용과 rollback 영향을 설명한다.
+        - [ ] 실제 AWS apply는 별도 승인 후 수행한다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: IaC와 아키텍처 영향
+      description: State, AWS resource, IAM, network, 비용, 보안과 Backend 연동 변경 여부를 적습니다.
+      placeholder: |
+        - State/resource:
+        - IAM/security:
+        - network:
+        - 비용/Region:
+        - Backend 연동:
+        - Replacement/destroy:
+    validations:
+      required: true
+
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: 미결정 사항과 의존 작업
+      description: 선행 결정과 작업을 적습니다. 없으면 "없음"으로 작성합니다.
+    validations:
+      required: true
+
+  - type: input
+    id: branch_slug
+    attributes:
+      label: 브랜치 slug
+      description: Issue 번호를 포함한 agent/{issue-number}-{slug}에 사용합니다.
+      placeholder: add-runner-automation
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent_permission
+    attributes:
+      label: 에이전트 작업 범위
+      description: Issue 자체는 push, PR, 병합, AWS apply 또는 force push 권한을 주지 않습니다.
+      options:
+        - 검증된 로컬 커밋까지 허용
+        - 파일 수정과 검증까지 허용 — 커밋 금지
+        - 조사와 진단만 허용 — 파일 변경 금지
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: ready
+    attributes:
+      label: 구현 준비 확인
+      options:
+        - label: Resource 변경과 비용/보안 영향이 검토 가능하게 작성되었습니다.
+          required: true
+        - label: 미승인 apply, destroy 또는 State 변경을 완료 조건으로 요구하지 않습니다.
+          required: true

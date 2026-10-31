@@ -1,0 +1,110 @@
+name: Engineering Task
+description: Terraform, CI/CD, 문서와 검증 등 유지보수 작업을 정의합니다.
+title: "[Task] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        기능은 Feature, 오류는 Bug, 구현 전 설계 승인은 Decision을 사용합니다. 각 항목은 결론부터 간결하게 씁니다.
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 목적
+      description: 해결할 유지보수 문제와 기대하는 저장소 또는 운영 상태를 적어주세요.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: task_type
+    attributes:
+      label: 작업 유형
+      options:
+        - Terraform resource 또는 module
+        - IAM, network 또는 security
+        - CI/CD
+        - 문서
+        - 테스트 또는 검증 도구
+        - 기타 유지보수
+    validations:
+      required: true
+
+  - type: textarea
+    id: contracts
+    attributes:
+      label: 관련 계약과 근거
+      description: Terraform 파일, README, 승인된 GitHub Issue/PR을 적습니다. 해당 없으면 이유를 적습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 작업 범위
+      description: 변경할 resource, module, workflow, 문서 또는 검증 도구를 적습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-Goals
+      description: 함께 수행하지 않을 기능 변경, 인프라 교체와 정리 작업을 적어주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 완료 조건과 검증
+      placeholder: |
+        - [ ] terraform fmt -check
+        - [ ] terraform validate
+        - [ ] plan에 의도하지 않은 변경이 없다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: IaC와 운영 영향
+      description: State, AWS resource, IAM, network, 비용과 Backend 연동 영향을 적습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 미결정 사항과 의존 작업
+      description: 선행 작업이나 외부 의존성을 적습니다. 없으면 "없음"으로 작성합니다.
+    validations:
+      required: true
+
+  - type: input
+    id: branch_slug
+    attributes:
+      label: 브랜치 slug
+      description: Issue 번호를 포함한 agent/{issue-number}-{slug}에 사용합니다.
+      placeholder: document-performance-deployment
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent_permission
+    attributes:
+      label: 에이전트 작업 범위
+      description: Issue 자체는 push, PR, 병합, AWS apply 또는 force push 권한을 주지 않습니다.
+      options:
+        - 검증된 로컬 커밋까지 허용
+        - 파일 수정과 검증까지 허용 — 커밋 금지
+        - 조사와 진단만 허용 — 파일 변경 금지
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: ready
+    attributes:
+      label: 작업 준비 확인
+      options:
+        - label: 변경 범위가 구체적이며 자격 증명과 State가 포함되지 않았습니다.
+          required: true

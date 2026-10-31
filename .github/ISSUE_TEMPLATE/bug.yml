@@ -1,0 +1,146 @@
+name: Bug
+description: 재현 가능한 Terraform, plan 또는 배포 오류를 기록합니다.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        AWS 자격 증명, Secret 값, terraform.tfstate와 운영 데이터는 첨부하지 마세요.
+        보안 취약점은 공개 Issue에 상세 내용을 남기기 전에 비공개 보고 경로를 확인해 주세요.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 문제 요약
+      description: 실제 동작이 어떤 인프라 계약이나 기대와 다른지 설명해 주세요.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: 영향도
+      options:
+        - Critical — 핵심 인프라 경로를 사용할 수 없음
+        - High — 주요 배포 또는 운영 흐름 실패
+        - Medium — 일부 기능 실패, 제한적인 우회가 있음
+        - Low — 경미한 오류 또는 사용성 문제
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 발생 환경
+      description: 브랜치/커밋, Terraform 및 Provider 버전, 환경과 Region을 적습니다. 계정 식별자와 비밀 값은 제외합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 재현 절차
+      placeholder: |
+        1. 실행한 명령과 비밀 값을 제거한 입력을 적습니다.
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 동작
+      description: 근거가 되는 IaC 문서, 승인된 Issue 또는 현재 AWS resource 계약을 연결해 주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 동작과 증거
+      description: 로그나 plan 요약을 첨부하되 계정 정보, Secret, state 내용은 제거합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: contracts
+    attributes:
+      label: 관련 계약과 참고 자료
+      description: Terraform 파일, README, 승인된 GitHub Issue/PR을 적습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 수정 범위
+      description: 영향받는 resource, module, variable 또는 workflow를 적습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-Goals
+      description: 함께 수행하지 않을 인프라 교체나 인접 작업을 적어주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 완료 조건과 회귀 검증
+      placeholder: |
+        - [ ] 재현 조건에서 오류가 해결된다.
+        - [ ] terraform fmt -check와 terraform validate가 통과한다.
+        - [ ] plan에 의도하지 않은 resource 변경이 없다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: IaC와 운영 영향
+      description: State, resource 교체/삭제, IAM, network, 비용과 rollback 영향을 적습니다.
+      placeholder: |
+        - State/resource:
+        - IAM/network:
+        - 비용/Region:
+        - Replacement/destroy:
+        - 실제 apply 승인:
+    validations:
+      required: true
+
+  - type: input
+    id: branch_slug
+    attributes:
+      label: 브랜치 slug
+      description: Issue 번호를 포함한 agent/{issue-number}-{slug}에 사용합니다.
+      placeholder: fix-runner-iam
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent_permission
+    attributes:
+      label: 에이전트 작업 범위
+      description: Issue 자체는 push, PR, 병합, AWS apply 또는 force push 권한을 주지 않습니다.
+      options:
+        - 검증된 로컬 커밋까지 허용
+        - 파일 수정과 검증까지 허용 — 커밋 금지
+        - 조사와 진단만 허용 — 파일 변경 금지
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: ready
+    attributes:
+      label: 조사 준비 확인
+      options:
+        - label: 자격 증명, terraform state와 운영 데이터를 제거했습니다.
+          required: true
+        - label: 완료 조건과 인프라 영향이 구체적이며 실제 apply는 별도 승인 대상으로 남겼습니다.
+          required: true
