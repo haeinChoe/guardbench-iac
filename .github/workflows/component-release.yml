@@ -1,0 +1,81 @@
+name: Component Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version tag to publish (for example, v0.2.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Validate and publish release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release policy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Version must match vMAJOR.MINOR.PATCH: $VERSION" >&2
+            exit 1
+          fi
+
+          git fetch origin main --tags
+
+          local_sha="$(git rev-parse HEAD)"
+          remote_main_sha="$(git rev-parse origin/main)"
+
+          if [[ "$local_sha" != "$remote_main_sha" ]]; then
+            echo "Release must run from the current main HEAD." >&2
+            echo "workflow HEAD: $local_sha" >&2
+            echo "origin/main:   $remote_main_sha" >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "Tag already exists and must not be moved or recreated: $VERSION" >&2
+            exit 1
+          fi
+
+          {
+            echo "### Component release policy"
+            echo "- Component: Infrastructure"
+            echo "- Version: $VERSION"
+            echo "- main SHA: $local_sha"
+            echo "- Existing tag: none"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create immutable release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "GuardBench Infrastructure $VERSION"
+          git push origin "refs/tags/$VERSION"
+
+      - name: Publish GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "GuardBench Infrastructure $VERSION" \
+            --generate-notes
