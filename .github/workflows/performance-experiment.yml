@@ -1,0 +1,309 @@
+name: Performance Experiment
+
+# Single entrypoint for one performance experiment: apply the experiment layer, check it,
+# run the Runner in CodeBuild, collect evidence, combine the verdict, then destroy.
+# Run it from the dev branch only. Configure the `performance-experiment` environment with
+# required reviewers: an approved run is the approval to apply.
+
+on:
+  workflow_dispatch:
+    inputs:
+      preset:
+        description: Infrastructure configuration, the file name of terraform/performance-experiment/presets/<id>.tfvars without the extension
+        required: true
+        type: string
+      backend_commit:
+        description: Backend commit SHA (40 lowercase hex characters) that CodeBuild checks out and the Runner runs from
+        required: true
+        type: string
+      scenario_path:
+        description: Scenario file path inside the Backend commit
+        required: true
+        type: string
+      dataset_path:
+        description: Dataset file path inside the Backend commit
+        required: true
+        type: string
+      app_image_tag:
+        description: Backend image tag (Git commit SHA) deployed to the Performance API and Worker
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+# One experiment at a time; a queued run waits instead of cancelling the running one.
+concurrency:
+  group: performance-experiment
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  AWS_REGION: ap-northeast-2
+  TF_IN_AUTOMATION: "true"
+  TF_DIR: terraform/performance-experiment
+
+jobs:
+  experiment:
+    name: Run performance experiment
+    runs-on: ubuntu-latest
+    environment: performance-experiment
+    timeout-minutes: 600
+    env:
+      PRESET: ${{ inputs.preset }}
+      BACKEND_COMMIT: ${{ inputs.backend_commit }}
+      SCENARIO_PATH: ${{ inputs.scenario_path }}
+      DATASET_PATH: ${{ inputs.dataset_path }}
+      APP_IMAGE_TAG: ${{ inputs.app_image_tag }}
+      TF_VAR_demo_ai_image_tag: ${{ vars.DEMO_AI_IMAGE_TAG }}
+      TF_VAR_demo_ai_bedrock_model_id: ${{ vars.DEMO_AI_BEDROCK_MODEL_ID }}
+      TF_VAR_demo_ai_bedrock_resource_arns: ${{ vars.DEMO_AI_BEDROCK_RESOURCE_ARNS }}
+      TF_VAR_demo_ai_target_model: ${{ vars.DEMO_AI_TARGET_MODEL || 'demo-model' }}
+    steps:
+      - name: Require the dev branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/dev" ]; then
+            echo "::error::The performance experiment runs from refs/heads/dev only (got $GITHUB_REF)."
+            exit 1
+          fi
+
+      - name: Check out this repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Validate inputs and prepare the work directory
+        run: |
+          if [[ ! "$PRESET" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
+            echo "::error::preset must be a preset file name: lowercase letters, digits and hyphens."
+            exit 1
+          fi
+          if [ ! -f "$TF_DIR/presets/$PRESET.tfvars" ]; then
+            echo "::error::$TF_DIR/presets/$PRESET.tfvars does not exist."
+            exit 1
+          fi
+          if [[ ! "$BACKEND_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::backend_commit must be a 40-character lowercase hexadecimal Git SHA."
+            exit 1
+          fi
+          if [[ ! "$APP_IMAGE_TAG" =~ ^[0-9a-f]{7,64}$ ]]; then
+            echo "::error::app_image_tag must be a Git commit SHA."
+            exit 1
+          fi
+          for path_name in SCENARIO_PATH DATASET_PATH; do
+            path_value="${!path_name}"
+            if [[ ! "$path_value" =~ ^[A-Za-z0-9._/-]+$ || "$path_value" == /* || "$path_value" == *..* ]]; then
+              echo "::error::$path_name must be a relative path inside the Backend commit."
+              exit 1
+            fi
+          done
+          exp_dir="$RUNNER_TEMP/performance-experiment"
+          mkdir -p "$exp_dir/results"
+          {
+            echo "EXP_DIR=$exp_dir"
+            echo "RUN_ID=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "TF_FLAGS=-var-file=presets/${PRESET}.tfvars -var infrastructure_id=${PRESET} -var infrastructure_revision=${GITHUB_SHA} -var app_image_tag=${APP_IMAGE_TAG}"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install script dependencies
+        run: python -m pip install --requirement scripts/performance/requirements.txt
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        with:
+          role-to-assume: ${{ vars.PERFORMANCE_EXPERIMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      - name: Terraform init
+        run: terraform -chdir="$TF_DIR" init -input=false -no-color
+
+      # From here on an apply may leave resources behind, so destroy must run.
+      - name: Mark apply attempted
+        id: apply_marker
+        run: echo "attempted=true" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform apply
+        id: apply
+        run: |
+          read -r -a apply_args <<< "$TF_FLAGS"
+          terraform -chdir="$TF_DIR" apply -input=false -auto-approve -no-color "${apply_args[@]}"
+
+      - name: Export the infrastructure snapshot
+        id: snapshot
+        run: |
+          terraform -chdir="$TF_DIR" output -json infrastructure_snapshot > "$EXP_DIR/snapshot.json"
+          bucket="$(jq -r '.resources.runner.results_bucket_name' "$EXP_DIR/snapshot.json")"
+          {
+            echo "result_prefix=s3://${bucket}/performance/results/${PRESET}/${RUN_ID}/"
+            echo "project=$(jq -r '.resources.runner.codebuild_project_name' "$EXP_DIR/snapshot.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Preflight check
+        id: preflight
+        continue-on-error: true
+        run: python -m scripts.performance.preflight --snapshot "$EXP_DIR/snapshot.json" --output "$EXP_DIR/preflight.json"
+
+      - name: Prepare the Runner build environment
+        id: build_env
+        if: steps.preflight.outcome == 'success'
+        env:
+          RESULT_PREFIX: ${{ steps.snapshot.outputs.result_prefix }}
+        run: |
+          jq -n \
+            --arg commit "$BACKEND_COMMIT" \
+            --arg scenario "$SCENARIO_PATH" \
+            --arg dataset "$DATASET_PATH" \
+            --arg prefix "${RESULT_PREFIX}runner/" \
+            --slurpfile snapshot "$EXP_DIR/snapshot.json" '
+            {
+              BACKEND_COMMIT: $commit,
+              API_URL: $snapshot[0].api_url,
+              TARGET_URL: $snapshot[0].target.url,
+              TARGET_MODEL: $snapshot[0].target.model,
+              TARGET_REVISION: ($snapshot[0].target.revision // ""),
+              SCENARIO_PATH: $scenario,
+              DATASET_PATH: $dataset,
+              RESULT_S3_PREFIX: $prefix
+            } | with_entries(select(.value != ""))' > "$EXP_DIR/build-env.json"
+          echo "runner_prefix=${RESULT_PREFIX}runner/" >> "$GITHUB_OUTPUT"
+
+      - name: Start the Runner build
+        id: start_build
+        if: steps.build_env.outcome == 'success'
+        env:
+          PROJECT: ${{ steps.snapshot.outputs.project }}
+        run: |
+          python -m scripts.performance.codebuild start \
+            --project "$PROJECT" --env-file "$EXP_DIR/build-env.json" --output "$EXP_DIR/build-start.json"
+
+      - name: Wait for the Runner build
+        id: wait_build
+        if: steps.start_build.outcome == 'success'
+        run: |
+          python -m scripts.performance.codebuild wait \
+            --start-file "$EXP_DIR/build-start.json" --output "$EXP_DIR/build.json" --timeout-seconds 29100
+
+      # Runs on failure and on cancellation so a Runner build never outlives the experiment layer.
+      - name: Stop the Runner build if it is still running
+        if: always() && steps.start_build.outcome == 'success'
+        run: python -m scripts.performance.codebuild stop --start-file "$EXP_DIR/build-start.json"
+
+      - name: Download the Runner results
+        id: download
+        if: always() && steps.start_build.outcome == 'success'
+        env:
+          RUNNER_PREFIX: ${{ steps.build_env.outputs.runner_prefix }}
+        run: python -m scripts.performance.s3results download --prefix "$RUNNER_PREFIX" --dest "$EXP_DIR/results"
+
+      - name: Collect infrastructure evidence
+        id: collect
+        if: always() && steps.start_build.outcome == 'success'
+        run: |
+          python -m scripts.performance.collect \
+            --snapshot "$EXP_DIR/snapshot.json" \
+            --result-dir "$EXP_DIR/results" \
+            --build "$EXP_DIR/build.json" \
+            --output "$EXP_DIR/infrastructure.json" \
+            --logs-output "$EXP_DIR/ecs-logs.json"
+
+      - name: Combine the verdict
+        id: combine
+        if: always() && steps.snapshot.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python -m scripts.performance.combine \
+            --snapshot "$EXP_DIR/snapshot.json" \
+            --result-dir "$EXP_DIR/results" \
+            --build "$EXP_DIR/build.json" \
+            --infrastructure "$EXP_DIR/infrastructure.json" \
+            --preflight "$EXP_DIR/preflight.json" \
+            --output "$EXP_DIR/final.json" \
+            --summary "$EXP_DIR/summary.md"
+
+      - name: Show the summary
+        if: always() && steps.snapshot.outcome == 'success'
+        run: |
+          if [ -f "$EXP_DIR/summary.md" ]; then cat "$EXP_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Preserve the experiment record in the results bucket
+        if: always() && steps.snapshot.outcome == 'success'
+        env:
+          RESULT_PREFIX: ${{ steps.snapshot.outputs.result_prefix }}
+        run: |
+          record="$EXP_DIR/record"
+          mkdir -p "$record"
+          for name in snapshot preflight build-start build infrastructure ecs-logs final; do
+            if [ -f "$EXP_DIR/$name.json" ]; then cp "$EXP_DIR/$name.json" "$record/"; fi
+          done
+          if [ -f "$EXP_DIR/summary.md" ]; then cp "$EXP_DIR/summary.md" "$record/"; fi
+          python -m scripts.performance.s3results upload --src "$record" --prefix "${RESULT_PREFIX}experiment/"
+
+      - name: Terraform destroy
+        id: destroy
+        if: always() && steps.apply_marker.outputs.attempted == 'true'
+        run: |
+          read -r -a apply_args <<< "$TF_FLAGS"
+          for attempt in 1 2; do
+            if terraform -chdir="$TF_DIR" destroy -input=false -auto-approve -no-color -lock-timeout=5m "${apply_args[@]}"; then
+              exit 0
+            fi
+            echo "::warning::terraform destroy attempt $attempt failed"
+          done
+          exit 1
+
+      - name: Verify the experiment layer is gone
+        id: verify_destroy
+        if: always() && steps.apply_marker.outputs.attempted == 'true'
+        run: |
+          if ! terraform -chdir="$TF_DIR" state list > "$EXP_DIR/state-after-destroy.txt"; then
+            echo "state list could not be read" > "$EXP_DIR/state-after-destroy.txt"
+          fi
+          snapshot_args=()
+          if [ -f "$EXP_DIR/snapshot.json" ]; then
+            snapshot_args=(--snapshot "$EXP_DIR/snapshot.json")
+          fi
+          python -m scripts.performance.verify_destroyed \
+            --state-list "$EXP_DIR/state-after-destroy.txt" "${snapshot_args[@]}" --output "$EXP_DIR/destroy-verification.json"
+
+      - name: Upload the experiment files
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: performance-experiment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/performance-experiment
+          if-no-files-found: ignore
+
+      # Last on purpose: the job fails here, after destroy and evidence preservation, unless
+      # every stage passed and the final verdict is PASS.
+      - name: Fail unless the experiment passed
+        if: always()
+        env:
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          DESTROY_OUTCOME: ${{ steps.destroy.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify_destroy.outcome }}
+        run: |
+          verdict="missing"
+          if [ -f "$EXP_DIR/final.json" ]; then
+            verdict="$(jq -r '.status' "$EXP_DIR/final.json")"
+          fi
+          echo "apply=$APPLY_OUTCOME verdict=$verdict destroy=$DESTROY_OUTCOME verify=$VERIFY_OUTCOME"
+          if [ "$APPLY_OUTCOME" != "success" ] || [ "$verdict" != "PASS" ] || [ "$DESTROY_OUTCOME" != "success" ] || [ "$VERIFY_OUTCOME" != "success" ]; then
+            echo "::error::The experiment did not pass: apply=$APPLY_OUTCOME verdict=$verdict destroy=$DESTROY_OUTCOME verify=$VERIFY_OUTCOME"
+            exit 1
+          fi

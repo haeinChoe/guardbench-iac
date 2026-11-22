@@ -124,6 +124,23 @@ class CollectTest(unittest.TestCase):
             self.assertEqual(json.loads((root / "infra.json").read_text(encoding="utf-8"))["status"], PASS)
             self.assertEqual(json.loads((root / "logs.json").read_text(encoding="utf-8")), [])
 
+    def test_window_prefers_explicit_values_then_runner_result_then_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "result.json").write_text(
+                json.dumps({"started_at": "2026-11-22T01:00:10Z", "finished_at": "2026-11-22T01:03:10Z"}),
+                encoding="utf-8",
+            )
+            build = {"start_time": "2026-11-22T00:50:00Z", "end_time": "2026-11-22T01:05:00Z"}
+            explicit = collect.resolve_window("2026-11-22T02:00:00Z", "2026-11-22T02:10:00Z", str(root), build)
+            self.assertEqual(explicit[0].hour, 2)
+            from_result = collect.resolve_window(None, None, str(root), build)
+            self.assertEqual((from_result[0].minute, from_result[1].minute), (0, 3))
+            from_build = collect.resolve_window(None, None, str(root / "empty"), build)
+            self.assertEqual((from_build[0].minute, from_build[1].minute), (50, 5))
+            with self.assertRaises(ValueError):
+                collect.resolve_window(None, None, None, None)
+
     def test_cli_error_still_writes_an_error_result(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

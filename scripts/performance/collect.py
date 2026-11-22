@@ -14,6 +14,7 @@ import argparse
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from .common import (
@@ -255,11 +256,37 @@ def collect(
     return infrastructure, log_sample
 
 
+def resolve_window(
+    start: str | None,
+    end: str | None,
+    result_dir: str | None,
+    build: dict[str, Any] | None,
+) -> tuple[datetime, datetime]:
+    """Pick the experiment window: explicit values, else the Runner result, else the build times."""
+    candidates: list[tuple[str | None, str | None]] = [(start, end)]
+    if result_dir:
+        path = Path(result_dir) / "result.json"
+        if path.is_file():
+            try:
+                result = read_json(path)
+                candidates.append((result.get("started_at"), result.get("finished_at")))
+            except (OSError, ValueError, AttributeError):
+                pass
+    if build:
+        candidates.append((build.get("start_time"), build.get("end_time")))
+    for first, last in candidates:
+        if first and last:
+            return parse_iso(first), parse_iso(last)
+    raise ValueError("no experiment window: pass --start/--end or provide a Runner result or build summary")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Collect infrastructure evidence for the experiment window.")
     parser.add_argument("--snapshot", required=True)
-    parser.add_argument("--start", required=True, help="window start, ISO 8601")
-    parser.add_argument("--end", required=True, help="window end, ISO 8601")
+    parser.add_argument("--start", help="window start, ISO 8601")
+    parser.add_argument("--end", help="window end, ISO 8601")
+    parser.add_argument("--result-dir", help="Runner results; their started_at/finished_at define the window")
+    parser.add_argument("--build", help="build summary JSON; used when the Runner left no result.json")
     parser.add_argument("--output", required=True)
     parser.add_argument("--logs-output", required=True)
     parser.add_argument("--drain-timeout-seconds", type=float, default=300)
@@ -267,11 +294,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         snapshot = read_json(args.snapshot)
+        build = read_json(args.build) if args.build and Path(args.build).is_file() else None
+        window_start, window_end = resolve_window(args.start, args.end, args.result_dir, build)
         infrastructure, log_sample = collect(
             snapshot,
             Clients(),
-            parse_iso(args.start),
-            parse_iso(args.end),
+            window_start,
+            window_end,
             args.drain_timeout_seconds,
             args.drain_poll_seconds,
         )
