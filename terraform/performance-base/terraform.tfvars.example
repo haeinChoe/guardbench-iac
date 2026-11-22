@@ -23,5 +23,8 @@ performance_codebuild_timeout_minutes = 60
 backend_repository_url                = "https://github.com/haeinChoe/guardbench-backend.git"
 
 # Performance Experiment OIDC Role
-performance_experiment_github_repository  = "haeinChoe/guardbench-iac"
-performance_experiment_github_environment = "performance-experiment"
+performance_experiment_github_repository    = "haeinChoe/guardbench-iac"
+performance_experiment_github_environment   = "performance-experiment"
+performance_experiment_workflow_path        = ".github/workflows/performance-experiment.yml"
+performance_experiment_workflow_ref         = "refs/heads/dev"
+performance_experiment_github_repository_id = "1387017401"

@@ -65,6 +65,22 @@ data "aws_iam_policy_document" "performance_experiment_assume_role" {
         "repo:${var.performance_experiment_github_repository}:environment:${var.performance_experiment_github_environment}",
       ]
     }
+
+    # The token must come from the entrypoint workflow file at the trusted ref, and from the
+    # repository with the expected immutable ID (a renamed or recreated repository does not match).
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:job_workflow_ref"
+      values = [
+        "${var.performance_experiment_github_repository}/${var.performance_experiment_workflow_path}@${var.performance_experiment_workflow_ref}",
+      ]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:repository_id"
+      values   = [var.performance_experiment_github_repository_id]
+    }
   }
 }
 

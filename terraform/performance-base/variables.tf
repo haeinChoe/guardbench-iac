@@ -148,3 +148,36 @@ variable "performance_experiment_github_environment" {
   type        = string
   default     = "performance-experiment"
 }
+
+variable "performance_experiment_workflow_path" {
+  description = "Path of the entrypoint workflow file in the trusted repository; the OIDC job_workflow_ref claim must be <repository>/<path>@<ref>"
+  type        = string
+  default     = ".github/workflows/performance-experiment.yml"
+
+  validation {
+    condition     = can(regex("^\\.github/workflows/[^/]+\\.ya?ml$", var.performance_experiment_workflow_path))
+    error_message = "performance_experiment_workflow_path must be a workflow file directly under .github/workflows/."
+  }
+}
+
+variable "performance_experiment_workflow_ref" {
+  description = "Git ref of the entrypoint workflow the OIDC job_workflow_ref claim must carry"
+  type        = string
+  default     = "refs/heads/dev"
+
+  validation {
+    condition     = can(regex("^refs/heads/[^*?\\s]+$", var.performance_experiment_workflow_ref))
+    error_message = "performance_experiment_workflow_ref must be a branch ref such as refs/heads/dev."
+  }
+}
+
+variable "performance_experiment_github_repository_id" {
+  description = "Numeric GitHub ID of performance_experiment_github_repository, matched against the OIDC repository_id claim (haeinChoe/guardbench-iac)"
+  type        = string
+  default     = "1387017401"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.performance_experiment_github_repository_id))
+    error_message = "performance_experiment_github_repository_id must be a numeric GitHub repository ID."
+  }
+}
