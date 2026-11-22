@@ -1,9 +1,44 @@
 # Dedicated Response Behavior Classifier served by SageMaker LMI/vLLM for performance experiments.
 locals {
-  performance_sagemaker_model_name       = "${var.project}-${var.environment}-performance-qwen3-4b"
-  performance_sagemaker_endpoint_name    = "${var.project}-${var.environment}-performance-qwen3-4b-endpoint"
-  performance_sagemaker_variant_name     = "AllTraffic"
-  performance_sagemaker_jumpstart_bucket = "jumpstart-cache-prod-${var.aws_region}"
+  # aws_sagemaker_model has no name_prefix argument. The model name is the prefix plus a short hash of the
+  # model definition, so a changed definition gets a new name and create_before_destroy can replace it
+  # without a name conflict. SageMaker model names allow 63 characters.
+  performance_sagemaker_model_name_prefix = "${var.project}-${var.environment}-perf-qwen3-4b-"
+  performance_sagemaker_endpoint_name     = "${var.project}-${var.environment}-performance-qwen3-4b-endpoint"
+  performance_sagemaker_variant_name      = "AllTraffic"
+  performance_sagemaker_jumpstart_bucket  = "jumpstart-cache-prod-${var.aws_region}"
+
+  performance_sagemaker_container = {
+    image          = "763104351884.dkr.ecr.${var.aws_region}.amazonaws.com/djl-inference:0.36.0-lmi18.0.0-cu128"
+    model_data_uri = "s3://${local.performance_sagemaker_jumpstart_bucket}/huggingface-reasoning/huggingface-reasoning-qwen3-4b/artifacts/inference-prepack/v2.0.0/"
+    environment = {
+      ENDPOINT_SERVER_TIMEOUT        = "3600"
+      HF_MODEL_ID                    = "/opt/ml/model"
+      MAX_BATCH_SIZE                 = "128"
+      MAX_CONCURRENT_REQUESTS        = "256"
+      MODEL_CACHE_ROOT               = "/opt/ml/model"
+      OPTION_DTYPE                   = "fp16"
+      OPTION_ENABLE_CHUNKED_PREFILL  = "true"
+      OPTION_GPU_MEMORY_UTILIZATION  = "0.88"
+      OPTION_MAX_MODEL_LEN           = "40960"
+      OPTION_MAX_NUM_BATCHED_TOKENS  = "81920"
+      OPTION_MAX_ROLLING_BATCH_SIZE  = "128"
+      OPTION_TENSOR_PARALLEL_DEGREE  = "1"
+      OPTION_TOOL_CALL_PARSER        = "hermes"
+      SAGEMAKER_ENV                  = "1"
+      SAGEMAKER_MODEL_SERVER_TIMEOUT = "3600"
+      SAGEMAKER_MODEL_SERVER_WORKERS = "1"
+      SAGEMAKER_PROGRAM              = "inference.py"
+      SAGEMAKER_SUBMIT_DIRECTORY     = "/opt/ml/model/code"
+      TENSOR_PARALLEL_DEGREE         = "1"
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN  = "1"
+    }
+  }
+
+  performance_sagemaker_model_name = "${local.performance_sagemaker_model_name_prefix}${substr(sha256(jsonencode([
+    aws_iam_role.performance_sagemaker_execution.arn,
+    local.performance_sagemaker_container,
+  ])), 0, 12)}"
 }
 
 resource "aws_iam_role" "performance_sagemaker_execution" {
@@ -74,37 +109,26 @@ resource "aws_sagemaker_model" "performance_classifier" {
   depends_on = [aws_iam_role_policy.performance_sagemaker_execution]
 
   primary_container {
-    image = "763104351884.dkr.ecr.${var.aws_region}.amazonaws.com/djl-inference:0.36.0-lmi18.0.0-cu128"
+    image = local.performance_sagemaker_container.image
 
     model_data_source {
       s3_data_source {
         s3_data_type     = "S3Prefix"
-        s3_uri           = "s3://${local.performance_sagemaker_jumpstart_bucket}/huggingface-reasoning/huggingface-reasoning-qwen3-4b/artifacts/inference-prepack/v2.0.0/"
+        s3_uri           = local.performance_sagemaker_container.model_data_uri
         compression_type = "None"
       }
     }
 
-    environment = {
-      ENDPOINT_SERVER_TIMEOUT        = "3600"
-      HF_MODEL_ID                    = "/opt/ml/model"
-      MAX_BATCH_SIZE                 = "128"
-      MAX_CONCURRENT_REQUESTS        = "256"
-      MODEL_CACHE_ROOT               = "/opt/ml/model"
-      OPTION_DTYPE                   = "fp16"
-      OPTION_ENABLE_CHUNKED_PREFILL  = "true"
-      OPTION_GPU_MEMORY_UTILIZATION  = "0.88"
-      OPTION_MAX_MODEL_LEN           = "40960"
-      OPTION_MAX_NUM_BATCHED_TOKENS  = "81920"
-      OPTION_MAX_ROLLING_BATCH_SIZE  = "128"
-      OPTION_TENSOR_PARALLEL_DEGREE  = "1"
-      OPTION_TOOL_CALL_PARSER        = "hermes"
-      SAGEMAKER_ENV                  = "1"
-      SAGEMAKER_MODEL_SERVER_TIMEOUT = "3600"
-      SAGEMAKER_MODEL_SERVER_WORKERS = "1"
-      SAGEMAKER_PROGRAM              = "inference.py"
-      SAGEMAKER_SUBMIT_DIRECTORY     = "/opt/ml/model/code"
-      TENSOR_PARALLEL_DEGREE         = "1"
-      VLLM_ALLOW_LONG_MAX_MODEL_LEN  = "1"
+    environment = local.performance_sagemaker_container.environment
+  }
+
+  # A changed definition gets a new name, so the replacement is created before the old model is destroyed.
+  lifecycle {
+    create_before_destroy = true
+
+    precondition {
+      condition     = length(local.performance_sagemaker_model_name) <= 63
+      error_message = "SageMaker model name must be at most 63 characters; shorten project or environment."
     }
   }
 
@@ -130,7 +154,7 @@ resource "aws_sagemaker_endpoint_configuration" "performance_classifier" {
   }
 
   tags = {
-    Name    = "${local.performance_sagemaker_model_name}-config"
+    Name    = "${trimsuffix(local.performance_sagemaker_model_name_prefix, "-")}-config"
     Purpose = "performance-testing"
   }
 }
