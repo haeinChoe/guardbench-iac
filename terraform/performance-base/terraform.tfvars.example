@@ -21,3 +21,9 @@ performance_codebuild_compute_type    = "BUILD_GENERAL1_MEDIUM"
 performance_codebuild_image           = "aws/codebuild/standard:7.0"
 performance_codebuild_timeout_minutes = 60
 backend_repository_url                = "https://github.com/haeinChoe/guardbench-backend.git"
+
+# Performance Experiment OIDC Role
+performance_experiment_github_repository  = "haeinChoe/guardbench-iac"
+performance_experiment_workflow_path      = ".github/workflows/performance-experiment.yml"
+performance_experiment_github_environment = "performance-experiment"
+performance_experiment_github_ref         = "refs/heads/dev"

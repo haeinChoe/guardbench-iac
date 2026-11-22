@@ -144,3 +144,16 @@ output "performance_codebuild_runner_security_group_id" {
   description = "Security group ID attached to the private VPC performance CodeBuild Runner"
   value       = aws_security_group.performance_codebuild_runner.id
 }
+
+# ============================================
+# Performance Experiment OIDC Role Outputs
+# ============================================
+output "performance_experiment_github_actions_role_arn" {
+  description = "IAM Role ARN assumed by the performance experiment entrypoint workflow via GitHub OIDC"
+  value       = aws_iam_role.performance_experiment_github_actions.arn
+}
+
+output "performance_experiment_github_actions_role_name" {
+  description = "IAM Role name assumed by the performance experiment entrypoint workflow via GitHub OIDC"
+  value       = aws_iam_role.performance_experiment_github_actions.name
+}

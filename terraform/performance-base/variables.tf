@@ -121,3 +121,42 @@ variable "backend_repository_url" {
     error_message = "backend_repository_url must be an HTTPS GitHub repository URL ending in .git."
   }
 }
+
+# ============================================
+# Performance Experiment OIDC Role 설정
+# ============================================
+variable "performance_base_state_key" {
+  description = "Remote state key for the performance-base root"
+  type        = string
+  default     = "performance-base/terraform.tfstate"
+}
+
+variable "performance_experiment_state_key" {
+  description = "Remote state key for the performance-experiment root"
+  type        = string
+  default     = "performance-experiment/terraform.tfstate"
+}
+
+variable "performance_experiment_github_repository" {
+  description = "GitHub repository allowed to assume the performance experiment OIDC role"
+  type        = string
+  default     = "haeinChoe/guardbench-iac"
+}
+
+variable "performance_experiment_workflow_path" {
+  description = "Entrypoint workflow path trusted via GitHub OIDC job_workflow_ref sub claim"
+  type        = string
+  default     = ".github/workflows/performance-experiment.yml"
+}
+
+variable "performance_experiment_github_environment" {
+  description = "GitHub environment name trusted via GitHub OIDC environment sub claim"
+  type        = string
+  default     = "performance-experiment"
+}
+
+variable "performance_experiment_github_ref" {
+  description = "Git ref trusted for job_workflow_ref sub claims"
+  type        = string
+  default     = "refs/heads/dev"
+}
