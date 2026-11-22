@@ -128,7 +128,8 @@ jobs:
         with:
           role-to-assume: ${{ vars.PERFORMANCE_EXPERIMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-duration-seconds: 7200
+          # Covers apply and the Runner build wait; equals the job timeout (600 minutes).
+          role-duration-seconds: 36000
 
       - name: Terraform init
         run: terraform -chdir="$TF_DIR" init -input=false -no-color
@@ -198,6 +199,17 @@ jobs:
         run: |
           python -m scripts.performance.codebuild wait \
             --start-file "$EXP_DIR/build-start.json" --output "$EXP_DIR/build.json" --timeout-seconds 29100
+
+      # The first credentials may expire during a long build wait, so cleanup uses a fresh session.
+      # A failed refresh must not block destroy, which can still use the earlier credentials.
+      - name: Refresh AWS credentials for cleanup
+        if: always() && steps.apply_marker.outputs.attempted == 'true'
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        with:
+          role-to-assume: ${{ vars.PERFORMANCE_EXPERIMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
 
       # Runs on failure and on cancellation so a Runner build never outlives the experiment layer.
       - name: Stop the Runner build if it is still running

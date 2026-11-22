@@ -44,6 +44,8 @@ IaC revision은 실행한 commit SHA(`github.sha`)를 `-var infrastructure_revis
 7. `terraform destroy`(apply를 시도했다면 항상, 실패·취소 포함), 삭제 확인(`scripts.performance.verify_destroyed`)
 8. 마지막 단계가 apply·최종 판정·destroy·삭제 확인 중 하나라도 통과하지 못했으면 job을 실패시킵니다.
 
+자격 증명은 두 번 받습니다. 첫 세션은 apply와 Runner build 대기 전체를 덮도록 10시간(job timeout과 같음)으로 받고, 정리 단계(build 중지, 결과 내려받기, 수집, 기록, destroy, 삭제 확인) 앞에서 2시간짜리 새 세션으로 갱신합니다. 갱신이 실패해도 destroy는 기존 자격 증명으로 계속 시도합니다.
+
 한 번에 실험 하나만 실행합니다(concurrency group 하나, 대기 중인 실행은 취소하지 않음). 실행을 취소하면 CodeBuild 중지와 destroy 단계가 실행됩니다. GitHub의 취소 후 정리 시간 안에 destroy가 끝나지 않으면 남은 자원을 확인하고 `terraform destroy`를 다시 실행해야 합니다.
 
 SageMaker 대수는 endpoint config의 `InitialInstanceCount`로 확인합니다. 이 IaC에는 SageMaker autoscaling이 없어서 InService endpoint의 현재 대수가 설정값과 같기 때문입니다. autoscaling을 추가하면 이 검사를 `DescribeEndpoint`의 현재 인스턴스 수(`ProductionVariants[].CurrentInstanceCount`) 검사로 바꿔야 합니다.

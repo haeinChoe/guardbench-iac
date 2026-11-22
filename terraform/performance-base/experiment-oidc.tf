@@ -85,10 +85,11 @@ data "aws_iam_policy_document" "performance_experiment_assume_role" {
 }
 
 resource "aws_iam_role" "performance_experiment_github_actions" {
-  name                 = "${var.project}-${var.environment}-perf-experiment-gha-role"
-  description          = "Run performance experiment lifecycle from guardbench-iac entrypoint workflow via GitHub OIDC"
-  assume_role_policy   = data.aws_iam_policy_document.performance_experiment_assume_role.json
-  max_session_duration = 7200
+  name               = "${var.project}-${var.environment}-perf-experiment-gha-role"
+  description        = "Run performance experiment lifecycle from guardbench-iac entrypoint workflow via GitHub OIDC"
+  assume_role_policy = data.aws_iam_policy_document.performance_experiment_assume_role.json
+  # Must cover apply plus the Runner build wait (the workflow job timeout is 600 minutes).
+  max_session_duration = 36000
 
   tags = {
     Name        = "${var.project}-${var.environment}-perf-experiment-gha-role"
