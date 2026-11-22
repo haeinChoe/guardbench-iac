@@ -174,10 +174,12 @@ guardbench-iac/
 │  └─ decisions/
 │     └─ 0001-performance-experiment-platform.md
 ├─ scripts/
-│  └─ performance/                         # 진입점 단계별 Python CLI (실행 전 확인, CodeBuild, 수집, 결합, 삭제 확인)
+│  └─ performance/                         # 진입점 단계별 TypeScript CLI (실행 전 확인, CodeBuild, 수집, 결합, 삭제 확인)
 ├─ tests/
-│  ├─ performance/                         # scripts 단위 테스트
+│  ├─ performance/                         # scripts 단위 테스트(node:test)
 │  └─ floci/                               # Floci 파이프라인 테스트
+├─ package.json                            # scripts 의존성(AWS SDK v3)과 실행 명령
+├─ tsconfig.json                           # tsc --noEmit 타입 검사
 └─ terraform/
    ├─ README.md
    ├─ shared/

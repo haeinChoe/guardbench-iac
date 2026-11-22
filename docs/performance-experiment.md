@@ -37,11 +37,11 @@ IaC revision은 실행한 commit SHA(`github.sha`)를 `-var infrastructure_revis
 
 1. 입력 검증, `terraform init`, `terraform apply`
 2. `infrastructure_snapshot` output을 파일로 저장
-3. 실행 전 확인(`scripts.performance.preflight`): ECS service(상태, desired·running·pending, rollout 완료, task definition, cpu·memory, Worker 동시성), RDS 등급·상태, SageMaker endpoint(`DescribeEndpoint`로 InService와 endpoint config 이름, `DescribeEndpointConfig`로 variant 이름·instance 종류·`InitialInstanceCount`), 성능 SQS·DLQ가 비어 있음. 불일치·조회 실패·미완료 rollout이면 부하를 시작하지 않습니다.
-4. CodeBuild 실행(`scripts.performance.codebuild start/wait`): buildspec 환경 변수를 override로 전달하고 완료까지 기다리며 build 로그를 출력합니다. 타임아웃이나 취소면 build를 중지합니다.
-5. Runner 결과 내려받기(`scripts.performance.s3results`), 인프라 증거 수집(`scripts.performance.collect`)
-6. 결과 결합(`scripts.performance.combine`)과 Step Summary, 결과 S3 보존
-7. `terraform destroy`(apply를 시도했다면 항상, 실패·취소 포함), 삭제 확인(`scripts.performance.verify_destroyed`)
+3. 실행 전 확인(`scripts/performance/preflight.ts`): ECS service(상태, desired·running·pending, rollout 완료, task definition, cpu·memory, Worker 동시성), RDS 등급·상태, SageMaker endpoint(`DescribeEndpoint`로 InService와 endpoint config 이름, `DescribeEndpointConfig`로 variant 이름·instance 종류·`InitialInstanceCount`), 성능 SQS·DLQ가 비어 있음. 불일치·조회 실패·미완료 rollout이면 부하를 시작하지 않습니다.
+4. CodeBuild 실행(`scripts/performance/codebuild.ts start/wait`): buildspec 환경 변수를 override로 전달하고 완료까지 기다리며 build 로그를 출력합니다. 타임아웃이나 취소면 build를 중지합니다.
+5. Runner 결과 내려받기(`scripts/performance/s3results.ts`), 인프라 증거 수집(`scripts/performance/collect.ts`)
+6. 결과 결합(`scripts/performance/combine.ts`)과 Step Summary, 결과 S3 보존
+7. `terraform destroy`(apply를 시도했다면 항상, 실패·취소 포함), 삭제 확인(`scripts/performance/verify_destroyed.ts`)
 8. 마지막 단계가 apply·최종 판정·destroy·삭제 확인 중 하나라도 통과하지 못했으면 job을 실패시킵니다.
 
 자격 증명은 두 번 받습니다. 첫 세션은 apply와 Runner build 대기 전체를 덮도록 10시간(job timeout과 같음)으로 받고, 정리 단계(build 중지, 결과 내려받기, 수집, 기록, destroy, 삭제 확인) 앞에서 2시간짜리 새 세션으로 갱신합니다. 갱신이 실패해도 destroy는 기존 자격 증명으로 계속 시도합니다.
@@ -70,14 +70,14 @@ SageMaker 대수는 endpoint config의 `InitialInstanceCount`로 확인합니다
 
 ## Floci 파이프라인 테스트
 
-`tests/floci`는 workflow와 같은 순서로 같은 CLI를 Floci(`floci/floci:2.4.0`) 위에서 실행합니다. 실행: `FLOCI_PIPELINE=1 python3 -m unittest tests.floci.test_pipeline -v` (Docker와 Terraform 필요). PR CI의 `floci-pipeline` job이 같은 명령을 실행합니다.
+`tests/floci`는 workflow와 같은 순서로 같은 CLI를 Floci(`floci/floci:2.4.0`) 위에서 실행합니다. 실행: `npm ci` 뒤 `npm run test:floci` (Docker와 Terraform 필요). PR CI의 `floci-pipeline` job이 같은 명령을 실행합니다.
 
 검증하는 경로는 Runner PASS(0), 측정 FAIL(1), 실행 오류(2), 실행 전 확인 실패입니다. 각 경로에서 Runner 결과와 `runner-exit-code`(실행 전 확인 실패는 Runner를 시작하지 않음), 최종 판정, 결과 S3 기록을 확인하고, destroy 뒤 state와 실험 층 자원(ECS service·task definition, SageMaker endpoint·config·model, 로그 그룹, IAM role, 보안 그룹, 컨테이너)이 남지 않았는지 테스트가 독립적으로 확인합니다.
 
 ### 택한 방식
 
 - `shared`와 `performance-base`는 실제 root를 Floci에 그대로 apply합니다. NAT, VPC endpoint, ELB, RDS, CodeBuild 프로젝트까지 Floci가 받아주므로 fixture state로 대체하지 않았습니다.
-- Terraform의 backend(Floci S3, `use_lockfile`), provider endpoint, `terraform_remote_state`는 임시 복사본에 쓰는 `override.tf`로만 전환합니다. root 코드와 workflow에 Floci 분기는 없습니다. 스크립트는 `AWS_ENDPOINT_URL`과 더미 자격 증명만으로 Floci에 닿습니다.
+- Terraform의 backend(Floci S3, `use_lockfile`), provider endpoint, `terraform_remote_state`는 임시 복사본에 쓰는 `override.tf`로만 전환합니다. root 코드와 workflow에 Floci 분기는 없습니다. 스크립트는 `AWS_ENDPOINT_URL`(loopback IP 주소라서 SDK가 path-style S3 URL을 쓰며 `<bucket>.localhost` 이름 해석에 기대지 않습니다)과 더미 자격 증명만으로 Floci에 닿습니다.
 - 받을 수 없는 이미지는 변수로 stub 이미지를 지정합니다(`app_image_repository_url`, `demo_ai_image_repository_url`, `performance_sagemaker_container_image`, `performance_codebuild_image`). 하나의 stub 이미지가 Backend API·Demo AI 대역(`/health`, 테스트 스위트 생성, 채팅 응답)을 모두 제공하고, SageMaker가 시작하는 `serve` 명령도 포함합니다.
 - Runner는 Backend 저장소 fixture(40자리 commit SHA, 시나리오별 `PASS`/`FAIL`/`ERROR`)를 CodeBuild 이미지에 넣고 `BACKEND_REPO_URL` override로 가리킵니다. 이 Runner는 ADR 0017 CLI와 결과 파일 형식을 따르는 대역이며 실제 Runner가 아닙니다. 실제 Runner는 Backend 저장소의 mock E2E가 검증합니다. k6는 buildspec이 GitHub에서 내려받으므로 네트워크가 필요합니다.
 
@@ -86,7 +86,7 @@ SageMaker 대수는 endpoint config의 `InitialInstanceCount`로 확인합니다
 - **Floci ELB v2 전달:** CodeBuild 컨테이너와 같은 방식(Floci DNS)으로 ALB 주소를 호출하면 요청이 ECS stub 컨테이너로 전달됩니다(`/health`, `/v1/chat/completions` 모두 200). 호스트에서는 ALB 이름도 컨테이너 IP도 닿지 않지만 Runner는 컨테이너 안에서 실행됩니다. 그래서 Runner 대상 URL을 ECS 컨테이너 직접 주소로 바꾸지 않고 스냅샷의 `api_url`과 `target.url`을 그대로 씁니다.
 - **SageMaker 확인:** Floci의 `DescribeEndpoint`는 `ProductionVariants`를 돌려주지 않습니다. 실행 전 확인은 `DescribeEndpoint`로 InService와 endpoint config 이름을, `DescribeEndpointConfig`로 variant 이름·instance 종류·`InitialInstanceCount`를 확인합니다. 환경별 분기는 없습니다. 이 IaC에는 SageMaker autoscaling이 없어서 InService endpoint의 현재 대수가 설정값과 같습니다. autoscaling을 추가하면 이 검사를 `DescribeEndpoint`의 현재 인스턴스 수(`ProductionVariants[].CurrentInstanceCount`) 검사로 바꿔야 합니다.
 - **buildspec 셸:** Floci CodeBuild는 `env.shell: bash`를 무시하고 `sh`(dash)로 명령을 실행합니다. 실제 CodeBuild는 `bash`를 씁니다. buildspec의 build·post_build 스크립트는 파일로 쓴 뒤 `bash`로 명시 실행해서 어느 셸에서도 같게 동작합니다.
-- **CodeBuild 로그:** Floci는 build 로그 스트림은 만들지만 CloudWatch Logs에 이벤트를 쓰지 않습니다. 테스트는 로그가 비어 있어도 실패로 보지 않습니다. 실제 AWS에서는 `BatchGetBuilds`가 알려주는 로그 그룹·스트림(`/codebuild/<project>`)을 `scripts.performance.codebuild wait`가 `GetLogEvents`로 읽어 출력합니다. 실험 OIDC role은 이 로그 그룹의 `GetLogEvents`·`FilterLogEvents`를 허용합니다. 이 경로는 단위 테스트(로그 출력, 로그 없음에도 wait 지속)로만 확인했고 실제 AWS에서 읽는 동작은 첫 실제 apply에서 확인합니다.
+- **CodeBuild 로그:** Floci는 build 로그 스트림은 만들지만 CloudWatch Logs에 이벤트를 쓰지 않습니다. 테스트는 로그가 비어 있어도 실패로 보지 않습니다. 실제 AWS에서는 `BatchGetBuilds`가 알려주는 로그 그룹·스트림(`/codebuild/<project>`)을 `scripts/performance/codebuild.ts wait`가 `GetLogEvents`로 읽어 출력합니다. 실험 OIDC role은 이 로그 그룹의 `GetLogEvents`·`FilterLogEvents`를 허용합니다. 이 경로는 단위 테스트(로그 출력, 로그 없음에도 wait 지속)로만 확인했고 실제 AWS에서 읽는 동작은 첫 실제 apply에서 확인합니다.
 
 ### 한계
 

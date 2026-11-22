@@ -103,8 +103,8 @@ terraform apply tfplan
 ## 성능 실험 진입점과 Floci 파이프라인 테스트
 
 - 실험 하나의 실행은 [`Performance Experiment` workflow](../.github/workflows/performance-experiment.yml)가 지휘합니다. 입력·순서·판정·결과 위치는 [성능 실험 실행 안내](../docs/performance-experiment.md)를 따릅니다.
-- `scripts/performance/`의 CLI는 workflow와 테스트가 같은 코드를 씁니다. AWS 접속 정보는 boto3 기본 동작(환경 변수 `AWS_ENDPOINT_URL` 등)으로만 정해지며 코드에 에뮬레이터 분기는 없습니다. 단위 테스트: `python3 -m unittest discover -s tests/performance -t .`
-- Floci 파이프라인 테스트(`tests/floci`)는 apply → 실행 전 확인 → CodeBuild buildspec 실행 → 수집·결합 → destroy를 Floci(`floci/floci:2.4.0`) 위에서 실행합니다. Docker와 Terraform이 필요합니다: `FLOCI_PIPELINE=1 python3 -m unittest tests.floci.test_pipeline -v`.
+- `scripts/performance/`의 CLI는 workflow와 테스트가 같은 코드를 씁니다. TypeScript(Node 24, 빌드 없이 `node scripts/performance/<이름>.ts`로 실행)와 AWS SDK v3로 작성되어 있고, AWS 접속 정보는 SDK 기본 동작(환경 변수 `AWS_ENDPOINT_URL` 등)으로만 정해지며 코드에 에뮬레이터 분기는 없습니다. 의존성은 `package-lock.json`에 정확한 버전으로 고정합니다. 타입 검사와 단위 테스트: `npm ci && npm run typecheck && npm test`
+- Floci 파이프라인 테스트(`tests/floci`)는 apply → 실행 전 확인 → CodeBuild buildspec 실행 → 수집·결합 → destroy를 Floci(`floci/floci:2.4.0`) 위에서 실행합니다. Docker와 Terraform이 필요합니다: `npm run test:floci`.
   - 더미 자격 증명과 loopback endpoint만 쓰고 `~/.aws`는 읽지 않습니다. 실제 원격 backend로 `terraform init`을 하지 않습니다.
   - Terraform의 backend·provider endpoint·`terraform_remote_state` 전환은 테스트가 임시 복사본에 쓰는 `override.tf`로만 합니다. root 코드에는 에뮬레이터 분기가 없습니다.
   - 이 테스트는 단계 순서와 결과 수집을 확인합니다. IAM 권한 충분성, GitHub OIDC 신뢰, 보안 그룹·네트워크 격리, 성능 수치는 재현하지 않으므로 첫 실제 apply에서 확인합니다.
