@@ -11,8 +11,9 @@ remote_state_region        = "ap-northeast-2"
 shared_state_key           = "shared/terraform.tfstate"
 performance_base_state_key = "performance-base/terraform.tfstate"
 
-# 구성 preset 및 이 저장소 commit SHA (40자리 소문자 hex)
-infrastructure_id       = "validation"
+# 이 저장소 commit SHA (40자리 소문자 hex)
+# infrastructure_id는 진입점이 preset 파일 이름(presets/<id>.tfvars)에서 만들어 -var로 전달합니다.
+# 로컬 검증 시에는 -var 'infrastructure_id=validation' 처럼 직접 전달합니다.
 infrastructure_revision = "0123456789abcdef0123456789abcdef01234567"
 
 # 검증된 backend commit SHA로 바꿔 사용합니다. latest tag는 허용하지 않습니다.

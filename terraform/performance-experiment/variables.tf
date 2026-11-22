@@ -44,7 +44,7 @@ variable "performance_base_state_key" {
 # Experiment Identity / Revision / Base Expectations
 # ============================================
 variable "infrastructure_id" {
-  description = "Preset configuration identifier matching terraform/performance-experiment/presets/<id>.tfvars"
+  description = "Preset configuration identifier. Not set in preset files: the entrypoint derives it from the preset file name (presets/<id>.tfvars) and passes it with -var"
   type        = string
 
   validation {
@@ -66,7 +66,6 @@ variable "infrastructure_revision" {
 variable "expected_performance_rds_instance_class" {
   description = "Expected RDS instance class for the performance-base database checked by the experiment entrypoint"
   type        = string
-  default     = "db.t4g.micro"
 
   validation {
     condition     = can(regex("^db\\.[a-z0-9]+\\.[a-z0-9]+$", var.expected_performance_rds_instance_class))
