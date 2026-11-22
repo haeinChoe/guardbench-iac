@@ -47,34 +47,33 @@ variable "api_container_port" {
   description = "Port exposed by the Performance API container"
   type        = number
   default     = 8080
+
+  validation {
+    condition     = var.api_container_port >= 1 && var.api_container_port == floor(var.api_container_port)
+    error_message = "api_container_port must be a positive whole number."
+  }
 }
 
 variable "performance_api_cpu" {
-  description = "CPU units for the independent Performance Backend task (1 vCPU = 1024)"
+  description = "CPU units for the Performance API task (1 vCPU = 1024)"
   type        = number
   default     = 512
 
   validation {
-    condition     = var.performance_api_cpu > 0 && var.performance_api_cpu == floor(var.performance_api_cpu)
+    condition     = var.performance_api_cpu >= 1 && var.performance_api_cpu == floor(var.performance_api_cpu)
     error_message = "performance_api_cpu must be a positive whole number."
   }
 }
 
 variable "performance_api_memory" {
-  description = "Memory (MiB) for the independent Performance Backend task"
+  description = "Memory (MiB) for the Performance API task"
   type        = number
   default     = 1024
 
   validation {
-    condition     = var.performance_api_memory > 0 && var.performance_api_memory == floor(var.performance_api_memory)
+    condition     = var.performance_api_memory >= 1 && var.performance_api_memory == floor(var.performance_api_memory)
     error_message = "performance_api_memory must be a positive whole number."
   }
-}
-
-variable "performance_app_enabled" {
-  description = "Run Performance Backend ECS tasks"
-  type        = bool
-  default     = false
 }
 
 variable "performance_api_desired_count" {
@@ -83,24 +82,46 @@ variable "performance_api_desired_count" {
   default     = 1
 
   validation {
-    condition     = var.performance_api_desired_count >= 0 && var.performance_api_desired_count == floor(var.performance_api_desired_count)
-    error_message = "performance_api_desired_count must be a non-negative whole number."
+    condition     = var.performance_api_desired_count >= 1 && var.performance_api_desired_count == floor(var.performance_api_desired_count)
+    error_message = "performance_api_desired_count must be a positive whole number."
+  }
+}
+
+variable "performance_worker_cpu" {
+  description = "CPU units for the Performance Worker task (1 vCPU = 1024)"
+  type        = number
+  default     = 512
+
+  validation {
+    condition     = var.performance_worker_cpu >= 1 && var.performance_worker_cpu == floor(var.performance_worker_cpu)
+    error_message = "performance_worker_cpu must be a positive whole number."
+  }
+}
+
+variable "performance_worker_memory" {
+  description = "Memory (MiB) for the Performance Worker task"
+  type        = number
+  default     = 1024
+
+  validation {
+    condition     = var.performance_worker_memory >= 1 && var.performance_worker_memory == floor(var.performance_worker_memory)
+    error_message = "performance_worker_memory must be a positive whole number."
   }
 }
 
 variable "performance_worker_desired_count" {
   description = "Desired task count for the Performance Worker ECS service"
   type        = number
-  default     = 4
+  default     = 1
 
   validation {
-    condition     = var.performance_worker_desired_count >= 0 && var.performance_worker_desired_count == floor(var.performance_worker_desired_count)
-    error_message = "performance_worker_desired_count must be a non-negative whole number."
+    condition     = var.performance_worker_desired_count >= 1 && var.performance_worker_desired_count == floor(var.performance_worker_desired_count)
+    error_message = "performance_worker_desired_count must be a positive whole number."
   }
 }
 
 variable "performance_worker_work_items_concurrency" {
-  description = "WorkItems worker concurrency for the Performance Backend"
+  description = "WorkItems worker concurrency passed to the Performance Worker container"
   type        = number
   default     = 1
 
@@ -111,7 +132,7 @@ variable "performance_worker_work_items_concurrency" {
 }
 
 variable "app_image_tag" {
-  description = "Immutable ECR tag for the verified backend commit"
+  description = "Immutable Git commit SHA tag for the Backend image deployed to Performance API and Worker"
   type        = string
 
   validation {
@@ -120,24 +141,9 @@ variable "app_image_tag" {
   }
 }
 
-variable "sagemaker_classifier_endpoint_name" {
-  description = "SageMaker classifier endpoint name passed to Performance Backend tasks"
-  type        = string
-  default     = "guardbench-qwen3-4b-endpoint"
-}
-
-variable "sagemaker_classifier_system_prompt" {
-  description = "Approved fixed system prompt for the SageMaker response behavior classifier; empty leaves the backend classifier safely unconfigured"
-  type        = string
-  default     = ""
-}
-
-variable "sagemaker_classifier_user_prompt_template" {
-  description = "Optional approved user prompt template for the SageMaker classifier; empty uses the backend default"
-  type        = string
-  default     = ""
-}
-
+# ============================================
+# Performance SageMaker Classifier 설정
+# ============================================
 variable "performance_sagemaker_instance_type" {
   description = "SageMaker ML instance type for the dedicated performance classifier endpoint"
   type        = string
@@ -160,6 +166,18 @@ variable "performance_sagemaker_instance_count" {
   }
 }
 
+variable "sagemaker_classifier_system_prompt" {
+  description = "Approved fixed system prompt for the SageMaker response behavior classifier; empty leaves the backend classifier safely unconfigured"
+  type        = string
+  default     = ""
+}
+
+variable "sagemaker_classifier_user_prompt_template" {
+  description = "Optional approved user prompt template for the SageMaker classifier; empty uses the backend default"
+  type        = string
+  default     = ""
+}
+
 # ============================================
 # Demo AI Target 설정
 # ============================================
@@ -170,6 +188,17 @@ variable "demo_ai_image_tag" {
   validation {
     condition     = can(regex("^[0-9a-f]{7,64}$", var.demo_ai_image_tag))
     error_message = "demo_ai_image_tag must be a verified Git commit SHA; mutable tags such as latest are not allowed."
+  }
+}
+
+variable "demo_ai_target_model" {
+  description = "OpenAI-compatible model identifier exposed by the Demo AI Target"
+  type        = string
+  default     = "demo-model"
+
+  validation {
+    condition     = trimspace(var.demo_ai_target_model) != ""
+    error_message = "demo_ai_target_model must not be empty."
   }
 }
 
@@ -202,12 +231,22 @@ variable "demo_ai_cpu" {
   description = "CPU units for the fixed Demo AI Fargate fixture"
   type        = number
   default     = 512
+
+  validation {
+    condition     = var.demo_ai_cpu >= 1 && var.demo_ai_cpu == floor(var.demo_ai_cpu)
+    error_message = "demo_ai_cpu must be a positive whole number."
+  }
 }
 
 variable "demo_ai_memory" {
   description = "Memory (MiB) for the fixed Demo AI Fargate fixture"
   type        = number
   default     = 1024
+
+  validation {
+    condition     = var.demo_ai_memory >= 1 && var.demo_ai_memory == floor(var.demo_ai_memory)
+    error_message = "demo_ai_memory must be a positive whole number."
+  }
 }
 
 variable "demo_ai_desired_count" {
@@ -216,13 +255,7 @@ variable "demo_ai_desired_count" {
   default     = 1
 
   validation {
-    condition     = var.demo_ai_desired_count >= 0
-    error_message = "demo_ai_desired_count must be zero or greater."
+    condition     = var.demo_ai_desired_count >= 1 && var.demo_ai_desired_count == floor(var.demo_ai_desired_count)
+    error_message = "demo_ai_desired_count must be a positive whole number."
   }
-}
-
-variable "demo_ai_enabled" {
-  description = "Keep Demo AI tasks running for integrated performance tests"
-  type        = bool
-  default     = false
 }
