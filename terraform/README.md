@@ -77,10 +77,11 @@ terraform apply tfplan
 
 ### `performance-experiment`
 
-- 구성 preset(`presets/<id>.tfvars`, 검증용 [`presets/validation.tfvars`](performance-experiment/presets/validation.tfvars))으로 `infrastructure_id`, API(`performance_api_cpu`·`performance_api_memory`·`performance_api_desired_count`)와 Worker(`performance_worker_cpu`·`performance_worker_memory`·`performance_worker_desired_count`·`performance_worker_work_items_concurrency`), 성능 전용 SageMaker(`performance_sagemaker_instance_type`·`performance_sagemaker_instance_count`), 기대 RDS 등급(`expected_performance_rds_instance_class`)을 지정합니다.
+- 구성 preset(`presets/<id>.tfvars`, 검증용 [`presets/validation.tfvars`](performance-experiment/presets/validation.tfvars))으로 API(`performance_api_cpu`·`performance_api_memory`·`performance_api_desired_count`)와 Worker(`performance_worker_cpu`·`performance_worker_memory`·`performance_worker_desired_count`·`performance_worker_work_items_concurrency`), 성능 전용 SageMaker(`performance_sagemaker_instance_type`·`performance_sagemaker_instance_count`), 기대 RDS 등급(`expected_performance_rds_instance_class`, 필수 입력)을 지정합니다. 구성 ID(`infrastructure_id`)는 preset 파일 이름이며 진입점이 `-var`로 전달합니다.
 - Performance API·Worker Task Definition은 Terraform이 직접 소유하며 `app_image_tag`로 테스트할 Backend commit SHA 이미지를 지정합니다. API·Worker·Demo AI Service는 `wait_for_steady_state = true`로 rollout 완료까지 대기합니다.
 - dev와 분리된 성능 전용 SageMaker classifier endpoint(`guardbench-<env>-performance-qwen3-4b-endpoint`)와 Synthetic Demo AI Application Target ECS Service(`demo_ai_desired_count`, `demo_ai_target_model`, 지정된 `demo_ai_bedrock_resource_arns`에 대한 `bedrock:InvokeModel` 허용)를 생성·관리합니다.
 - Performance API·Worker 컨테이너에는 Internal Performance ALB 호스트명(`allowed-private-hostnames`)과 Performance RDS/SQS·전용 SageMaker endpoint 연결 정보가 주입됩니다.
+- SageMaker model 이름은 접두사(`<project>-<environment>-perf-qwen3-4b-`)와 model 정의 해시 12자리로 만듭니다(`aws_sagemaker_model`은 `name_prefix`를 지원하지 않음). 정의가 바뀌면 이름이 달라져 새 model을 먼저 만든 뒤 이전 model을 삭제합니다. 이 root가 만드는 IAM role 5개(API·Worker task, exec, SageMaker 실행, Demo AI exec·task)는 모두 `performance-base`의 `experiment_permissions_boundary_arn`을 `permissions_boundary`로 가집니다.
 - `infrastructure_snapshot` output으로 구성 ID, `infrastructure_revision`(40자리 소문자 hex commit SHA), 기대 capacity, 실제 AWS 자원 식별자, `api_url`, `target` 연결 정보(`type`, `url`, `model`, `revision`)를 내보냅니다. 기반 층 RDS 등급과 실제 상태 대조는 실험 진입점이 수행합니다.
 
 ## 보안 및 Secret 관리 원칙
