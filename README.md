@@ -2,40 +2,36 @@
 
 > **Portfolio fork**  
 > 이 저장소는 팀 프로젝트 `GuardBench/guardbench-iac`를 개인 포트폴리오용으로 fork한 저장소입니다.  
-> 서비스의 설계·구현은 팀의 공동 결과물이며, 이 README는 현재 `main`의 Terraform 구성을 기준으로 GuardBench MVP의 AWS 인프라 구조와 운영 경계를 설명합니다.
+> 서비스의 설계·구현은 팀의 공동 결과물이며, 이 README는 현재 Terraform root 구성과 [ADR 0001](docs/decisions/0001-performance-experiment-platform.md)을 기준으로 GuardBench MVP의 AWS 인프라 구조와 경계를 설명합니다.
 
-GuardBench IaC는 **Frontend, Backend API/Worker, 비동기 메시징, 데이터베이스, AI 평가 경로와 성능 테스트 환경을 Terraform으로 선언한 AWS 인프라 저장소**입니다.
+GuardBench IaC는 **Frontend, Backend API/Worker, 비동기 메시징, 데이터베이스, AI 평가 경로와 성능 실험 환경을 네 개의 독립 Terraform root로 선언한 AWS 인프라 저장소**입니다.
 
 ---
 
 ## 전체 구조
 
 ```text
-Internet
-   │
-   ├─ CloudFront
-   │    └─ S3 Frontend
-   │
-   └─ ALB
-        └─ ECS API Service
-              │
-              ├─ PostgreSQL (RDS)
-              ├─ SQS
-              └─ AI / external provider
-                    │
-                    └─ NAT Gateway / VPC Endpoints
+shared (상시)
+ ├─ VPC, Public/Private Subnets, IGW, NAT Gateway, VPC Endpoints
+ ├─ ECR (app, demo_ai), ECS Cluster, Shared ALB Access Logs Bucket
+ └─ GitHub Actions OIDC Provider 및 공통 배포 Role
 
-SQS
- └─ ECS Worker Service
-      ├─ PostgreSQL
-      ├─ SageMaker Runtime
-      └─ CloudWatch
+dev (상시, shared 참조)
+ ├─ CloudFront + S3 Frontend
+ ├─ Public ALB → Dev API ECS Service (WORKER_ENABLED=false)
+ ├─ Dev Worker ECS Service (WORKER_ENABLED=true) + Auto Scaling
+ ├─ Dev RDS, Dev SQS/DLQ, SSM DB Access Host
+ └─ Dev SageMaker Classifier Endpoint, CloudWatch/SNS 관측성
 
-Performance environment
- ├─ dedicated API / Worker services
- ├─ isolated RDS
- ├─ isolated SQS / DLQ
- └─ optional EC2 performance runner
+performance-base (상시, shared 참조)
+ ├─ Performance RDS (격리 DB)
+ ├─ Performance SQS/DLQ
+ ├─ Performance Internal ALB + Target Groups
+ └─ Performance Results S3 Bucket
+
+performance-experiment (shared · performance-base 참조)
+ ├─ Performance API / Worker ECS Service 및 Task Definition
+ └─ Synthetic Demo AI ECS Service (Application Target)
 ```
 
 ---
@@ -60,7 +56,7 @@ WORKER_ENABLED=true
 
 API Service는 HTTP 요청 처리에 집중하고 Worker는 SQS work item을 소비합니다.
 
-Worker는 Application Auto Scaling 대상으로 관리되며, 현재 Terraform의 기본 dev capacity는 다음과 같습니다.
+Worker는 Application Auto Scaling 대상으로 관리되며, `terraform/dev`의 기본 dev capacity는 다음과 같습니다.
 
 ```hcl
 backend_service_desired_counts = {
@@ -76,7 +72,7 @@ Worker scale-out은 queue depth와 oldest message age를 기준으로 동작하�
 
 ### 2. 비동기 실행 인프라를 독립 리소스로 관리
 
-Dev와 Performance는 각각 독립된 source queue와 DLQ를 가집니다.
+Dev(`terraform/dev`)와 Performance(`terraform/performance-base`)는 각각 독립된 source queue와 DLQ를 가집니다.
 
 주요 queue 역할:
 
@@ -94,15 +90,13 @@ Backend ECS task는 private subnet에서 실행됩니다.
 
 외부 HTTPS가 필요한 경우 NAT Gateway를 사용하고, AWS 서비스 중 private connectivity가 가능한 경로는 VPC Endpoint를 사용합니다.
 
-현재 Terraform은 다음과 같은 endpoint를 선언합니다.
+`terraform/shared`는 다음 Interface/Gateway VPC Endpoint를 선언합니다.
 
-- SQS
-- Amazon Bedrock
-- SageMaker Runtime
-- SSM
-- CloudWatch Logs
-- ECR
-- S3
+- ECS, RDS, SageMaker API, SageMaker Runtime
+- SQS, Amazon Bedrock, Bedrock Runtime
+- SSM, SSM Messages, EC2 Messages
+- Secrets Manager, CloudWatch Logs, CloudWatch Monitoring
+- ECR (`ecr.api`, `ecr.dkr`), S3 (Gateway)
 
 ### 4. Frontend는 S3 + CloudFront
 
@@ -124,13 +118,13 @@ AWS IAM Role
 
 ### 5. Terraform과 Application 배포 책임을 분리
 
-Terraform은 infrastructure configuration과 base Task Definition을 관리합니다.
+Terraform은 infrastructure configuration과 baseline Task Definition을 관리합니다.
 
 Backend application image 배포 자체는 Backend GitHub Actions가 담당합니다.
 
 ```text
 Terraform
-→ infrastructure / base task definition
+→ infrastructure / baseline task definition
 
 Backend GitHub Actions
 → immutable application image
@@ -140,37 +134,27 @@ Backend GitHub Actions
 
 Application image에는 `latest` 대신 commit SHA 기반 immutable tag를 사용합니다.
 
-### 6. Dev와 Performance 환경을 분리
+### 6. Terraform Root 분리 및 Dev/Performance 격리
 
-Performance 환경은 Dev 부하와 데이터에 영향을 주지 않도록 별도 리소스를 사용합니다.
+단일 state 충돌과 환경 간 영향 범위를 줄이기 위해 Terraform 구성을 수명주기와 소유권에 따라 4개 root로 분리합니다.
 
-- dedicated Performance API Service
-- dedicated Performance Worker Service
-- isolated Performance RDS
-- isolated Performance SQS / DLQ
-- optional performance runner EC2
+- **`terraform/shared`**: 네트워크, VPC Endpoint, ECR, ECS Cluster, 공통 ALB Access Logs, GitHub OIDC Provider 및 공통 IAM
+- **`terraform/dev`**: Dev API/Worker ECS, Auto Scaling, Dev RDS, Dev SQS/DLQ, Public ALB, CloudFront+S3, SSM DB Access Host, Dev SageMaker, Dev 관측성
+- **`terraform/performance-base`**: Performance RDS, Performance SQS/DLQ, Performance Internal ALB, 성능 결과 S3
+- **`terraform/performance-experiment`**: Performance API/Worker ECS Service·Task Definition, Synthetic Demo AI ECS Service
 
-ECS cluster는 공유하지만 application service, queue, database는 역할별로 분리합니다.
+각 root는 S3 backend에 `<root>/terraform.tfstate` 키로 독립 state를 저장하며, 하위 root는 상위 root의 output을 `terraform_remote_state`로 읽습니다.
 
 ---
 
 ## 주요 AWS 리소스
 
-| 영역 | 주요 리소스 |
+| Root | 주요 리소스 |
 | --- | --- |
-| Network | VPC, Public/Private Subnet, NAT Gateway |
-| Frontend | S3, CloudFront |
-| API | ALB, ECS Service |
-| Worker | ECS Service, Application Auto Scaling |
-| Messaging | SQS, DLQ |
-| Database | Amazon RDS for PostgreSQL |
-| Container | Amazon ECR |
-| AI | SageMaker Runtime, Bedrock VPC Endpoint |
-| Secrets | AWS Secrets Manager |
-| Observability | CloudWatch, SNS |
-| Operations | AWS Systems Manager |
-| CI/CD Auth | IAM OIDC roles |
-| Performance | dedicated ECS/RDS/SQS, optional EC2 runner |
+| `terraform/shared` | VPC, Public/Private Subnet, NAT Gateway, VPC Endpoints, ECR (`app`, `demo_ai`), ECS Cluster, ALB Access Logs S3, GitHub OIDC Provider |
+| `terraform/dev` | Public ALB, CloudFront, Frontend S3, Dev ECS Services/Task Definitions, Application Auto Scaling, Dev RDS, SSM Access Host, Dev SQS/DLQ, SageMaker Endpoint, CloudWatch/SNS |
+| `terraform/performance-base` | Performance RDS, Performance SQS/DLQ, Performance Internal ALB, Performance Results S3 |
+| `terraform/performance-experiment` | Performance API/Worker ECS Services/Task Definitions, Demo AI ECS Service |
 
 ---
 
@@ -179,16 +163,21 @@ ECS cluster는 공유하지만 application service, queue, database는 역할별
 ```text
 guardbench-iac/
 ├─ bootstrap/
+│  └─ setup-remote-state.ps1
+├─ docs/
+│  └─ decisions/
+│     └─ 0001-performance-experiment-platform.md
 └─ terraform/
-   ├─ main.tf
-   ├─ variables.tf
-   ├─ outputs.tf
-   └─ README.md
+   ├─ README.md
+   ├─ shared/
+   ├─ dev/
+   ├─ performance-base/
+   └─ performance-experiment/
 ```
 
-상세 운영 절차와 import/apply 주의사항은 [Terraform runbook](terraform/README.md)을 기준으로 합니다.
+상세 실행 절차, state 연결, import/apply 주의사항은 [Terraform runbook](terraform/README.md)을 기준으로 합니다.
 
-아키텍처 결정은 [docs/decisions](docs/decisions/)에 기록합니다. 성능 실험 환경은 [0001](docs/decisions/0001-performance-experiment-platform.md)을 따릅니다.
+아키텍처 결정은 [docs/decisions](docs/decisions/)에 기록합니다. 성능 실험 플랫폼 결정은 [ADR 0001](docs/decisions/0001-performance-experiment-platform.md)을 따릅니다.
 
 ---
 
@@ -196,12 +185,23 @@ guardbench-iac/
 
 ### 요구사항
 
-- Terraform 1.10+
-- AWS credentials
-- Region: `ap-northeast-2`
+- Terraform 1.10+ (S3 native `use_lockfile` 지원)
+- AWS credentials (`ap-northeast-2`)
+
+### 실행 순서
+
+하위 root가 상위 root의 `terraform_remote_state` output을 참조하므로 반드시 아래 순서로 적용합니다.
+
+```text
+1. terraform/shared
+2. terraform/dev 또는 terraform/performance-base
+3. terraform/performance-experiment
+```
+
+각 root 디렉터리에서 다음 절차로 검증·적용합니다.
 
 ```bash
-cd terraform
+cd terraform/<root>
 terraform init -input=false
 terraform fmt -check
 terraform validate
@@ -214,53 +214,20 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-이미 존재하는 리소스를 Terraform 관리 대상으로 편입할 때는 apply 전에 import가 필요할 수 있습니다.
-
-상세 절차:
-
-→ [terraform/README.md](terraform/README.md)
-
----
-
-## 운영상 중요한 경계
-
-### Terraform apply는 Backend 배포가 아님
-
-```text
-terraform apply
-≠
-new backend application release
-```
-
-IaC 변경과 application release를 분리하여, 인프라 변경이 의도하지 않은 image 교체로 이어지지 않도록 합니다.
-
-### Dev와 Performance 데이터베이스는 분리
-
-Performance RDS는 부하 테스트 재현성을 위한 고정 의존 인프라입니다.
-
-Dev RDS와 같은 데이터베이스를 공유하지 않습니다.
-
-### 자격 증명은 plaintext output으로 노출하지 않음
-
-RDS credential은 Secrets Manager를 통해 관리하며 Terraform output이나 ECS Task Definition에 plaintext로 직접 기록하지 않습니다.
+상세 절차 및 root별 구성: → [terraform/README.md](terraform/README.md)
 
 ---
 
 ## 주요 Output
 
-Terraform은 다음과 같은 값을 제공합니다.
+각 root는 자신의 `outputs.tf`에 책임 범위의 값만 노출하며 하위 root는 `terraform_remote_state`로 이를 소비합니다.
 
-- Frontend CloudFront URL
-- ALB API URL
-- ECS Service / Task Definition 정보
-- ECR repository URL
-- Dev / Performance RDS endpoint
-- Dev / Performance SQS queue 정보
-- GitHub Actions OIDC role ARN
-- Performance Runner 정보
-- SageMaker classifier endpoint 정보
-
-실제 전체 목록은 [terraform/outputs.tf](terraform/outputs.tf)를 참고합니다.
+| Root | 주요 Output | 정의 파일 |
+| --- | --- | --- |
+| `terraform/shared` | VPC/Subnet IDs, VPC Endpoint SG/IDs, ECR URLs, ECS Cluster, ALB Access Logs Bucket, OIDC Provider/Role | [terraform/shared/outputs.tf](terraform/shared/outputs.tf) |
+| `terraform/dev` | Frontend CloudFront URL, Public ALB API URL, Dev ECS/Worker, Dev RDS/SQS, SSM Access Host, SageMaker Endpoint, Ops SNS | [terraform/dev/outputs.tf](terraform/dev/outputs.tf) |
+| `terraform/performance-base` | Performance RDS Endpoint/Secret, Performance SQS/DLQ, Internal ALB URL/Target Groups, Performance Results Bucket | [terraform/performance-base/outputs.tf](terraform/performance-base/outputs.tf) |
+| `terraform/performance-experiment` | Performance API/Worker ECS Services·Task Definitions, Demo AI Service, Target URL/Model/Revision, Performance Deploy Role | [terraform/performance-experiment/outputs.tf](terraform/performance-experiment/outputs.tf) |
 
 ---
 
