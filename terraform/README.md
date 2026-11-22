@@ -77,10 +77,15 @@ terraform apply tfplan
 - **CodeBuild Performance Runner**:
   - `shared`의 private subnet과 전용 Security Group(`performance_codebuild_runner_security_group_id`)에 배치하며, 내부 Performance ALB(API·Demo AI 경로)와 VPC Endpoint·S3 Gateway 및 HTTPS egress(Backend checkout, `k6` release, Python 패키지 설치)만 허용합니다.
   - Terraform `aws_codebuild_project.performance_runner`는 `NO_SOURCE`와 `file("../../codebuild/performance-runner.buildspec.yml")`로 [buildspec](../codebuild/performance-runner.buildspec.yml)을 프로젝트 정의에 직접 포함합니다. compute type(`performance_codebuild_compute_type`)과 timeout(`performance_codebuild_timeout_minutes`)은 변수로 관리합니다.
-  - buildspec은 공개 Backend 저장소(`haeinChoe/guardbench-backend`)를 지정한 40자리 commit SHA(`BACKEND_COMMIT`)로 checkout한 뒤 `performance/k6/VERSION`의 `k6`를 설치하고, ADR 0017 CLI 인자(`--api-url`, `--target-url`, `--target-model`, 선택적 `--target-revision`, `--scenario`, `--dataset`, `--result-dir`)로 Runner를 실행합니다. 종료 코드(`0` PASS / `1` FAIL / `2` 오류)를 결과 디렉터리의 `runner-exit-code` 파일과 함께 `RESULT_S3_PREFIX`에 업로드하고 동일 종료 코드를 build 결과로 전달합니다.
+  - buildspec의 build 단계는 입력 검증, 공개 Backend 저장소(`haeinChoe/guardbench-backend`)의 40자리 commit SHA(`BACKEND_COMMIT`) checkout, `performance/k6/VERSION`의 `k6` 설치, Python 의존성 설치를 먼저 수행한 뒤 ADR 0017 CLI 인자(`--api-url`, `--target-url`, `--target-model`, 선택적 `--target-revision`, `--scenario`, `--dataset`, `--result-dir`)로 Runner를 실행합니다. Runner 실행 전 단계가 실패하면 `runner-exit-code`는 `2`입니다.
+  - post_build 단계는 항상 실행되어 종료 코드(`0` PASS / `1` FAIL / `2` 오류)를 결과 디렉터리의 `runner-exit-code` 파일과 함께 `RESULT_S3_PREFIX`에 업로드하고, build는 동일한 종료 코드로 끝납니다.
 - **실험 전용 GitHub OIDC Role**(`performance_experiment_github_actions_role_arn`):
-  - `haeinChoe/guardbench-iac`의 `performance-experiment` GitHub environment(`sub`: `repo:haeinChoe/guardbench-iac:environment:performance-experiment`)만 신뢰합니다.
+  - `haeinChoe/guardbench-iac`의 `performance-experiment` GitHub environment(`sub`: `repo:haeinChoe/guardbench-iac:environment:performance-experiment`)만 신뢰합니다. 추가로 다음 조건을 모두 만족하는 토큰만 허용합니다.
+    - `job_workflow_ref` = `haeinChoe/guardbench-iac/<performance_experiment_workflow_path>@<performance_experiment_workflow_ref>` (기본 `.github/workflows/performance-experiment.yml`, `refs/heads/dev`)
+    - `repository_id` = `performance_experiment_github_repository_id` (기본 `1387017401`)
   - 진입점 workflow job은 `environment: performance-experiment`를 사용해야 하며, GitHub repository 설정에서 `performance-experiment` environment의 deployment branch를 `dev`로 제한해야 합니다.
+  - 실험 IAM role은 permissions boundary(`experiment_permissions_boundary_arn`, 정책 `<project>-<environment>-perf-experiment-boundary`)를 가진 경우에만 만들거나 권한을 붙일 수 있습니다. `iam:CreateRole`, `iam:PutRolePolicy`, `iam:AttachRolePolicy`, `iam:PutRolePermissionsBoundary`는 `iam:PermissionsBoundary`가 이 boundary ARN일 때만 허용하고, `iam:DeleteRolePermissionsBoundary`와 boundary 정책 자체의 변경·삭제(`iam:CreatePolicyVersion`, `iam:SetDefaultPolicyVersion`, `iam:DeletePolicy`, `iam:DeletePolicyVersion`)는 명시적으로 Deny합니다.
+  - boundary는 실험 role이 가질 수 있는 최대 권한(ECR pull, 실험 로그 그룹 쓰기, Performance RDS secret 읽기, 성능 SageMaker endpoint 호출, 성능 SQS 사용, ECS Exec 채널, Demo AI의 Bedrock 호출, SageMaker 실행 role의 모델 artifact 읽기·endpoint 로그 쓰기)입니다. `performance-experiment` root의 모든 IAM role은 `permissions_boundary`로 이 값을 받아야 합니다.
   - `performance-experiment` state 읽기·쓰기와 실험 층 자원(ECS·SageMaker·IAM PassRole 범위 제한·Logs·실험용 SG/규칙) apply/destroy, Runner CodeBuild 시작·중지·조회, 결과 S3, 성능 CloudWatch 지표·로그·SQS·RDS 조회만 허용하며 dev 자원 ARN은 포함하지 않습니다.
 
 ### `performance-experiment`
