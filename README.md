@@ -161,13 +161,23 @@ performance-experiment:
 
 ```text
 guardbench-iac/
+├─ .github/
+│  └─ workflows/
+│     ├─ performance-experiment.yml        # 성능 실험 단일 진입점
+│     └─ performance-experiment-ci.yml     # 진입점 PR 검증(단위 테스트, actionlint, Floci 파이프라인 테스트)
 ├─ bootstrap/
 │  └─ setup-remote-state.ps1
 ├─ codebuild/
 │  └─ performance-runner.buildspec.yml
 ├─ docs/
+│  ├─ performance-experiment.md
 │  └─ decisions/
 │     └─ 0001-performance-experiment-platform.md
+├─ scripts/
+│  └─ performance/                         # 진입점 단계별 Python CLI (실행 전 확인, CodeBuild, 수집, 결합, 삭제 확인)
+├─ tests/
+│  ├─ performance/                         # scripts 단위 테스트
+│  └─ floci/                               # Floci 파이프라인 테스트
 └─ terraform/
    ├─ README.md
    ├─ shared/
@@ -180,7 +190,7 @@ guardbench-iac/
 
 상세 실행 절차, state 연결, import/apply 주의사항은 [Terraform runbook](terraform/README.md)을 기준으로 합니다.
 
-아키텍처 결정은 [docs/decisions](docs/decisions/)에 기록합니다. 성능 실험 플랫폼 결정은 [ADR 0001](docs/decisions/0001-performance-experiment-platform.md)을 따릅니다.
+성능 실험 실행 방법은 [성능 실험 실행 안내](docs/performance-experiment.md)를 따릅니다. 아키텍처 결정은 [docs/decisions](docs/decisions/)에 기록합니다. 성능 실험 플랫폼 결정은 [ADR 0001](docs/decisions/0001-performance-experiment-platform.md)을 따릅니다.
 
 ---
 
