@@ -1,13 +1,12 @@
 # 0001. 성능 실험 환경: Terraform root 분리, 실험 층 수명주기, CodeBuild 단일 진입점
 
-> Status: DRAFT
+> Status: APPROVED
 > Owner: Infrastructure
 > Last reviewed: 2026-11-22
 > Canonical source: GitHub
 > Origin: GitHub Issue #12
-> AI assistance: 이 문서의 초안은 LLM의 도움으로 작성되었으며 사람의 검토가 필요합니다.
 
-- ADR Status: PROPOSED
+- ADR Status: ACCEPTED
 - Decision date: 2026-11-22
 - Related Issue: #12; Backend 측 경계 haeinChoe/guardbench-backend#37 (Backend ADR 0017)
 
