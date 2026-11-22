@@ -87,7 +87,7 @@ terraform apply tfplan
   - 실험 IAM role은 permissions boundary(`experiment_permissions_boundary_arn`, 정책 `<project>-<environment>-perf-experiment-boundary`)를 가진 경우에만 만들거나 권한을 붙일 수 있습니다. `iam:CreateRole`, `iam:PutRolePolicy`, `iam:AttachRolePolicy`, `iam:PutRolePermissionsBoundary`는 `iam:PermissionsBoundary`가 이 boundary ARN일 때만 허용하고, `iam:DeleteRolePermissionsBoundary`와 boundary 정책 자체의 변경·삭제(`iam:CreatePolicyVersion`, `iam:SetDefaultPolicyVersion`, `iam:DeletePolicy`, `iam:DeletePolicyVersion`)는 명시적으로 Deny합니다.
   - boundary는 실험 role이 가질 수 있는 최대 권한(ECR pull, 실험 로그 그룹 쓰기, Performance RDS secret 읽기, 성능 SageMaker endpoint 호출, 성능 SQS 사용, ECS Exec 채널, Demo AI의 Bedrock 호출, SageMaker 실행 role의 모델 artifact 읽기·endpoint 로그 쓰기)입니다. `performance-experiment` root의 모든 IAM role은 `permissions_boundary`로 이 값을 받아야 합니다.
   - `performance-experiment` state 읽기·쓰기와 실험 층 자원(ECS·SageMaker·IAM PassRole 범위 제한·Logs·실험용 SG/규칙) apply/destroy, Runner CodeBuild 시작·중지·조회, 결과 S3, 성능 CloudWatch 지표·로그·SQS·RDS 조회만 허용하며 dev 자원 ARN은 포함하지 않습니다.
-  - 권한은 customer managed policy 두 개(`<project>-<environment>-perf-experiment-gha-state-lifecycle`, `<project>-<environment>-perf-experiment-gha-logs-network-run`)로 나누어 role에 붙입니다. 하나로 합친 문서가 role 인라인 정책 한도(공백 제외 10,240자)와 managed policy 한도(6,144자)를 넘기 때문입니다.
+  - 권한은 customer managed policy 두 개(`<project>-<environment>-perf-experiment-gha-state-lifecycle`, `<project>-<environment>-perf-experiment-gha-logs-network-run`)로 나누어 role에 붙입니다. 하나로 합친 문서가 role 인라인 정책 한도(공백 제외 10,240자, 합친 문서 약 10,687자)를 넘기 때문입니다. 두 정책의 크기는 각각 5,743자와 4,944자로 managed policy 한도(6,144자) 안입니다. 권한을 추가할 때 이 크기를 다시 확인합니다.
 
 ### `performance-experiment`
 
