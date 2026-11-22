@@ -41,6 +41,40 @@ variable "performance_base_state_key" {
 }
 
 # ============================================
+# Experiment Identity / Revision / Base Expectations
+# ============================================
+variable "infrastructure_id" {
+  description = "Preset configuration identifier matching terraform/performance-experiment/presets/<id>.tfvars"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9-]{0,62}$", var.infrastructure_id))
+    error_message = "infrastructure_id must contain only lowercase letters, digits, and hyphens."
+  }
+}
+
+variable "infrastructure_revision" {
+  description = "Full 40-character lowercase hexadecimal Git commit SHA of this IaC repository"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.infrastructure_revision))
+    error_message = "infrastructure_revision must be a 40-character lowercase hexadecimal Git commit SHA."
+  }
+}
+
+variable "expected_performance_rds_instance_class" {
+  description = "Expected RDS instance class for the performance-base database checked by the experiment entrypoint"
+  type        = string
+  default     = "db.t4g.micro"
+
+  validation {
+    condition     = can(regex("^db\\.[a-z0-9]+\\.[a-z0-9]+$", var.expected_performance_rds_instance_class))
+    error_message = "expected_performance_rds_instance_class must be a valid RDS instance class (for example db.t4g.micro)."
+  }
+}
+
+# ============================================
 # Performance Backend ECS 설정
 # ============================================
 variable "api_container_port" {
