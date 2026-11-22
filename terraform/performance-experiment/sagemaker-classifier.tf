@@ -9,7 +9,7 @@ locals {
   performance_sagemaker_jumpstart_bucket  = "jumpstart-cache-prod-${var.aws_region}"
 
   performance_sagemaker_container = {
-    image          = "763104351884.dkr.ecr.${var.aws_region}.amazonaws.com/djl-inference:0.36.0-lmi18.0.0-cu128"
+    image          = coalesce(var.performance_sagemaker_container_image, "763104351884.dkr.ecr.${var.aws_region}.amazonaws.com/djl-inference:0.36.0-lmi18.0.0-cu128")
     model_data_uri = "s3://${local.performance_sagemaker_jumpstart_bucket}/huggingface-reasoning/huggingface-reasoning-qwen3-4b/artifacts/inference-prepack/v2.0.0/"
     environment = {
       ENDPOINT_SERVER_TIMEOUT        = "3600"
