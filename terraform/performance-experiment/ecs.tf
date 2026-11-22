@@ -95,7 +95,8 @@ resource "aws_cloudwatch_log_group" "performance_app" {
 }
 
 resource "aws_iam_role" "performance_ecs_task_execution" {
-  name = "${var.project}-${var.environment}-performance-ecs-exec-role"
+  name                 = "${var.project}-${var.environment}-performance-ecs-exec-role"
+  permissions_boundary = data.terraform_remote_state.performance_base.outputs.experiment_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -132,7 +133,8 @@ resource "aws_iam_role_policy" "performance_ecs_exec_secrets" {
 }
 
 resource "aws_iam_role" "performance_app_task" {
-  name = "${var.project}-${var.environment}-performance-app-task-role"
+  name                 = "${var.project}-${var.environment}-performance-app-task-role"
+  permissions_boundary = data.terraform_remote_state.performance_base.outputs.experiment_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

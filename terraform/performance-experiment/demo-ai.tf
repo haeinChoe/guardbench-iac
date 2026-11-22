@@ -19,7 +19,8 @@ resource "aws_cloudwatch_log_group" "demo_ai" {
 }
 
 resource "aws_iam_role" "demo_ai_task_execution" {
-  name = "${var.project}-${var.environment}-demo-ai-exec-role"
+  name                 = "${var.project}-${var.environment}-demo-ai-exec-role"
+  permissions_boundary = data.terraform_remote_state.performance_base.outputs.experiment_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -42,7 +43,8 @@ resource "aws_iam_role_policy_attachment" "demo_ai_task_execution" {
 }
 
 resource "aws_iam_role" "demo_ai_task" {
-  name = "${var.project}-${var.environment}-demo-ai-task-role"
+  name                 = "${var.project}-${var.environment}-demo-ai-task-role"
+  permissions_boundary = data.terraform_remote_state.performance_base.outputs.experiment_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

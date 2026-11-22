@@ -7,8 +7,9 @@ locals {
 }
 
 resource "aws_iam_role" "performance_sagemaker_execution" {
-  name        = "${var.project}-${var.environment}-performance-sagemaker-exec-role"
-  description = "GuardBench performance classifier - Qwen3-4B SageMaker endpoint execution role"
+  name                 = "${var.project}-${var.environment}-performance-sagemaker-exec-role"
+  description          = "GuardBench performance classifier - Qwen3-4B SageMaker endpoint execution role"
+  permissions_boundary = data.terraform_remote_state.performance_base.outputs.experiment_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
