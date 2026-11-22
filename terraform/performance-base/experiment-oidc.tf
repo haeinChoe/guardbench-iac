@@ -26,6 +26,7 @@ locals {
     "${local.experiment_oidc_role_prefix}-demo-ai-task-role",
   ]
   experiment_sagemaker_role_arn = "${local.experiment_oidc_role_prefix}-performance-sagemaker-exec-role"
+  experiment_iam_role_arns      = concat(local.experiment_ecs_role_arns, [local.experiment_sagemaker_role_arn])
   experiment_log_group_arns = [
     "arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.project}-${var.environment}/performance-app",
     "arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.project}-${var.environment}/demo-ai",
@@ -139,12 +140,19 @@ data "aws_iam_policy_document" "performance_experiment" {
     effect = "Allow"
     actions = [
       "ecs:DeleteTaskDefinitions",
-      "ecs:DeregisterTaskDefinition",
       "ecs:ListTagsForResource",
       "ecs:RegisterTaskDefinition",
       "ecs:TagResource",
     ]
     resources = local.experiment_ecs_task_def_arns
+  }
+
+  # DeregisterTaskDefinition does not support resource-level permissions.
+  statement {
+    sid       = "DeregisterExperimentTaskDefinitions"
+    effect    = "Allow"
+    actions   = ["ecs:DeregisterTaskDefinition"]
+    resources = ["*"]
   }
 
   statement {
@@ -198,19 +206,18 @@ data "aws_iam_policy_document" "performance_experiment" {
       "sagemaker:UpdateEndpoint",
     ]
     resources = [
-      "arn:${data.aws_partition.current.partition}:sagemaker:${var.aws_region}:${data.aws_caller_identity.current.account_id}:model/${var.project}-${var.environment}-performance-*",
+      "arn:${data.aws_partition.current.partition}:sagemaker:${var.aws_region}:${data.aws_caller_identity.current.account_id}:model/${var.project}-${var.environment}-perf-*",
       "arn:${data.aws_partition.current.partition}:sagemaker:${var.aws_region}:${data.aws_caller_identity.current.account_id}:endpoint-config/${var.project}-${var.environment}-perf-*",
       "arn:${data.aws_partition.current.partition}:sagemaker:${var.aws_region}:${data.aws_caller_identity.current.account_id}:endpoint/${var.project}-${var.environment}-performance-*",
     ]
   }
 
-  # Experiment IAM roles and service-scoped PassRole.
+  # Experiment IAM roles. Privilege-granting writes are allowed only while the role carries
+  # the performance experiment permissions boundary, so the roles can never exceed it.
   statement {
     sid    = "ManageExperimentIamRoles"
     effect = "Allow"
     actions = [
-      "iam:AttachRolePolicy",
-      "iam:CreateRole",
       "iam:DeleteRole",
       "iam:DeleteRolePolicy",
       "iam:DetachRolePolicy",
@@ -220,11 +227,47 @@ data "aws_iam_policy_document" "performance_experiment" {
       "iam:ListInstanceProfilesForRole",
       "iam:ListRolePolicies",
       "iam:ListRoleTags",
-      "iam:PutRolePolicy",
       "iam:TagRole",
       "iam:UntagRole",
     ]
-    resources = concat(local.experiment_ecs_role_arns, [local.experiment_sagemaker_role_arn])
+    resources = local.experiment_iam_role_arns
+  }
+
+  statement {
+    sid    = "GrantPermissionsToBoundedExperimentIamRoles"
+    effect = "Allow"
+    actions = [
+      "iam:AttachRolePolicy",
+      "iam:CreateRole",
+      "iam:PutRolePermissionsBoundary",
+      "iam:PutRolePolicy",
+    ]
+    resources = local.experiment_iam_role_arns
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PermissionsBoundary"
+      values   = [aws_iam_policy.performance_experiment_boundary.arn]
+    }
+  }
+
+  statement {
+    sid       = "DenyRemovingExperimentRoleBoundary"
+    effect    = "Deny"
+    actions   = ["iam:DeleteRolePermissionsBoundary"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "DenyChangingExperimentBoundaryPolicy"
+    effect = "Deny"
+    actions = [
+      "iam:CreatePolicyVersion",
+      "iam:DeletePolicy",
+      "iam:DeletePolicyVersion",
+      "iam:SetDefaultPolicyVersion",
+    ]
+    resources = [aws_iam_policy.performance_experiment_boundary.arn]
   }
 
   statement {
@@ -344,13 +387,19 @@ data "aws_iam_policy_document" "performance_experiment" {
     actions = ["ec2:CreateTags"]
     resources = [
       "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:security-group/*",
-      "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:security-group-rule/*",
     ]
 
     condition {
       test     = "StringEquals"
       variable = "aws:RequestTag/Purpose"
       values   = ["performance-testing"]
+    }
+
+    # Tags may be applied only as part of CreateSecurityGroup, not to existing groups.
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:CreateAction"
+      values   = ["CreateSecurityGroup"]
     }
   }
 

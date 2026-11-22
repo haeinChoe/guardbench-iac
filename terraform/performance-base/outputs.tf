@@ -157,3 +157,8 @@ output "performance_experiment_github_actions_role_name" {
   description = "IAM Role name assumed by the performance experiment entrypoint workflow via GitHub OIDC"
   value       = aws_iam_role.performance_experiment_github_actions.name
 }
+
+output "experiment_permissions_boundary_arn" {
+  description = "Permissions boundary ARN that every IAM role created by the performance-experiment root must carry"
+  value       = aws_iam_policy.performance_experiment_boundary.arn
+}
