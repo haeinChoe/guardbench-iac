@@ -109,13 +109,14 @@ jobs:
             echo "TF_FLAGS=-var-file=presets/${PRESET}.tfvars -var infrastructure_id=${PRESET} -var infrastructure_revision=${GITHUB_SHA} -var app_image_tag=${APP_IMAGE_TAG}"
           } >> "$GITHUB_ENV"
 
-      - name: Set up Python
-        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          python-version: "3.11"
+          node-version: "24"
+          cache: npm
 
       - name: Install script dependencies
-        run: python -m pip install --requirement scripts/performance/requirements.txt
+        run: npm ci --omit=dev
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
@@ -158,7 +159,7 @@ jobs:
       - name: Preflight check
         id: preflight
         continue-on-error: true
-        run: python -m scripts.performance.preflight --snapshot "$EXP_DIR/snapshot.json" --output "$EXP_DIR/preflight.json"
+        run: node scripts/performance/preflight.ts --snapshot "$EXP_DIR/snapshot.json" --output "$EXP_DIR/preflight.json"
 
       - name: Prepare the Runner build environment
         id: build_env
@@ -190,14 +191,14 @@ jobs:
         env:
           PROJECT: ${{ steps.snapshot.outputs.project }}
         run: |
-          python -m scripts.performance.codebuild start \
+          node scripts/performance/codebuild.ts start \
             --project "$PROJECT" --env-file "$EXP_DIR/build-env.json" --output "$EXP_DIR/build-start.json"
 
       - name: Wait for the Runner build
         id: wait_build
         if: steps.start_build.outcome == 'success'
         run: |
-          python -m scripts.performance.codebuild wait \
+          node scripts/performance/codebuild.ts wait \
             --start-file "$EXP_DIR/build-start.json" --output "$EXP_DIR/build.json" --timeout-seconds 29100
 
       # The first credentials may expire during a long build wait, so cleanup uses a fresh session.
@@ -214,20 +215,20 @@ jobs:
       # Runs on failure and on cancellation so a Runner build never outlives the experiment layer.
       - name: Stop the Runner build if it is still running
         if: always() && steps.start_build.outcome == 'success'
-        run: python -m scripts.performance.codebuild stop --start-file "$EXP_DIR/build-start.json"
+        run: node scripts/performance/codebuild.ts stop --start-file "$EXP_DIR/build-start.json"
 
       - name: Download the Runner results
         id: download
         if: always() && steps.start_build.outcome == 'success'
         env:
           RUNNER_PREFIX: ${{ steps.build_env.outputs.runner_prefix }}
-        run: python -m scripts.performance.s3results download --prefix "$RUNNER_PREFIX" --dest "$EXP_DIR/results"
+        run: node scripts/performance/s3results.ts download --prefix "$RUNNER_PREFIX" --dest "$EXP_DIR/results"
 
       - name: Collect infrastructure evidence
         id: collect
         if: always() && steps.start_build.outcome == 'success'
         run: |
-          python -m scripts.performance.collect \
+          node scripts/performance/collect.ts \
             --snapshot "$EXP_DIR/snapshot.json" \
             --result-dir "$EXP_DIR/results" \
             --build "$EXP_DIR/build.json" \
@@ -239,7 +240,7 @@ jobs:
         if: always() && steps.snapshot.outcome == 'success'
         continue-on-error: true
         run: |
-          python -m scripts.performance.combine \
+          node scripts/performance/combine.ts \
             --snapshot "$EXP_DIR/snapshot.json" \
             --result-dir "$EXP_DIR/results" \
             --build "$EXP_DIR/build.json" \
@@ -264,7 +265,7 @@ jobs:
             if [ -f "$EXP_DIR/$name.json" ]; then cp "$EXP_DIR/$name.json" "$record/"; fi
           done
           if [ -f "$EXP_DIR/summary.md" ]; then cp "$EXP_DIR/summary.md" "$record/"; fi
-          python -m scripts.performance.s3results upload --src "$record" --prefix "${RESULT_PREFIX}experiment/"
+          node scripts/performance/s3results.ts upload --src "$record" --prefix "${RESULT_PREFIX}experiment/"
 
       - name: Terraform destroy
         id: destroy
@@ -290,7 +291,7 @@ jobs:
           if [ -f "$EXP_DIR/snapshot.json" ]; then
             snapshot_args=(--snapshot "$EXP_DIR/snapshot.json")
           fi
-          python -m scripts.performance.verify_destroyed \
+          node scripts/performance/verify_destroyed.ts \
             --state-list "$EXP_DIR/state-after-destroy.txt" "${snapshot_args[@]}" --output "$EXP_DIR/destroy-verification.json"
 
       - name: Upload the experiment files
