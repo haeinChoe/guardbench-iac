@@ -1,0 +1,4 @@
+id: fixture-error
+type: SMOKE
+outcome: ERROR
+concurrent_test_runs: 2
