@@ -188,6 +188,8 @@ guardbench-iac/
 
 상세 운영 절차와 import/apply 주의사항은 [Terraform runbook](terraform/README.md)을 기준으로 합니다.
 
+아키텍처 결정은 [docs/decisions](docs/decisions/)에 기록합니다. 성능 실험 환경은 [0001](docs/decisions/0001-performance-experiment-platform.md)(DRAFT)을 따릅니다.
+
 ---
 
 ## Terraform 실행
