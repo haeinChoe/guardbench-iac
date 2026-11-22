@@ -1,6 +1,8 @@
 """Pre-run check: compare the snapshot's expected values with the real AWS state.
 
 Any mismatch, failed lookup or unfinished rollout means the load must not start.
+SageMaker: status and endpoint config name come from DescribeEndpoint; variant, instance type
+and instance count come from DescribeEndpointConfig (see _sagemaker_checks).
 Exit code: 0 all checks passed, 1 at least one check failed or could not be made.
 """
 
@@ -105,30 +107,33 @@ def _rds_checks(rds: Any, identifier: str, expected_class: str) -> list[dict[str
 def _sagemaker_checks(
     sagemaker: Any,
     endpoint_name: str,
+    endpoint_config_name: str,
     variant_name: str,
     instance_type: str,
     instance_count: int,
 ) -> list[dict[str, Any]]:
+    """Check the endpoint is InService and was built from the expected endpoint config.
+
+    Variant name, instance type and instance count are read from the endpoint config
+    (InitialInstanceCount). That equals the live instance count only because this IaC has no
+    SageMaker autoscaling: an InService endpoint then runs exactly the configured count.
+    If autoscaling is added, replace the count check with the endpoint's current instance
+    count (DescribeEndpoint ProductionVariants[].CurrentInstanceCount).
+    """
     try:
         endpoint = sagemaker.describe_endpoint(EndpointName=endpoint_name)
-        checks = [compare("sagemaker.status", "InService", endpoint.get("EndpointStatus"))]
-        variants = {item.get("VariantName"): item for item in endpoint.get("ProductionVariants", [])}
+        checks = [
+            compare("sagemaker.status", "InService", endpoint.get("EndpointStatus")),
+            compare("sagemaker.endpoint_config", endpoint_config_name, endpoint.get("EndpointConfigName")),
+        ]
+        config = sagemaker.describe_endpoint_config(EndpointConfigName=endpoint.get("EndpointConfigName") or endpoint_config_name)
+        variants = {item.get("VariantName"): item for item in config.get("ProductionVariants", [])}
         variant = variants.get(variant_name)
         if variant is None:
             checks.append(check("sagemaker.variant", FAIL, variant_name, sorted(variants), "variant not found"))
             return checks
-        checks.append(compare("sagemaker.current_instance_count", instance_count, variant.get("CurrentInstanceCount")))
-        checks.append(compare("sagemaker.desired_instance_count", instance_count, variant.get("DesiredInstanceCount")))
-        config_name = endpoint.get("EndpointConfigName")
-        config = sagemaker.describe_endpoint_config(EndpointConfigName=config_name)
-        config_variants = {item.get("VariantName"): item for item in config.get("ProductionVariants", [])}
-        checks.append(
-            compare(
-                "sagemaker.instance_type",
-                instance_type,
-                (config_variants.get(variant_name) or {}).get("InstanceType"),
-            )
-        )
+        checks.append(compare("sagemaker.instance_type", instance_type, variant.get("InstanceType")))
+        checks.append(compare("sagemaker.instance_count", instance_count, variant.get("InitialInstanceCount")))
         return checks
     except Exception as exc:  # noqa: BLE001
         return [error_check("sagemaker.endpoint", exc)]
@@ -203,6 +208,7 @@ def evaluate(snapshot: dict[str, Any], clients: Clients) -> dict[str, Any]:
     checks += _sagemaker_checks(
         clients.sagemaker,
         sagemaker_expected["endpoint_name"],
+        dig(resources, "sagemaker", "endpoint_config_name"),
         sagemaker_expected["production_variant_name"],
         sagemaker_expected["instance_type"],
         sagemaker_expected["desired_instance_count"],

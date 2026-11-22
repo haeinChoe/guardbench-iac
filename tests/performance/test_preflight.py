@@ -75,6 +75,18 @@ class PreflightTest(unittest.TestCase):
         self.fakes["sagemaker"].status = "Creating"
         self.assertEqual(by_name(self.run_preflight())["sagemaker.status"]["status"], FAIL)
 
+    def test_sagemaker_instance_count_mismatch_fails(self):
+        self.fakes["sagemaker"].instance_count = 2
+        self.assertEqual(by_name(self.run_preflight())["sagemaker.instance_count"]["status"], FAIL)
+
+    def test_sagemaker_variant_missing_fails(self):
+        self.fakes["sagemaker"].variant_name = "Other"
+        self.assertEqual(by_name(self.run_preflight())["sagemaker.variant"]["status"], FAIL)
+
+    def test_sagemaker_endpoint_config_mismatch_fails(self):
+        self.fakes["sagemaker"].endpoint_config = "someone-elses-config"
+        self.assertEqual(by_name(self.run_preflight())["sagemaker.endpoint_config"]["status"], FAIL)
+
     def test_sagemaker_instance_type_mismatch_fails(self):
         self.fakes["sagemaker"].instance_type = "ml.g5.2xlarge"
         self.assertEqual(by_name(self.run_preflight())["sagemaker.instance_type"]["status"], FAIL)

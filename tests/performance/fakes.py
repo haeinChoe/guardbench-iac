@@ -147,31 +147,33 @@ class FakeRds:
 
 
 class FakeSageMaker:
+    """Shaped like Floci's responses: DescribeEndpoint carries no ProductionVariants."""
+
     def __init__(self) -> None:
         self.status = "InService"
+        self.endpoint_config = "perf-config"
         self.instance_type = "ml.g5.xlarge"
         self.instance_count = 1
+        self.variant_name = "AllTraffic"
         self.exists = True
 
     def describe_endpoint(self, EndpointName: str) -> dict[str, Any]:  # noqa: N803
         if not self.exists:
             raise client_error("ValidationException", f'Could not find endpoint "{EndpointName}".', "DescribeEndpoint")
-        return {
-            "EndpointStatus": self.status,
-            "EndpointConfigName": "perf-config",
-            "ProductionVariants": [
-                {
-                    "VariantName": "AllTraffic",
-                    "CurrentInstanceCount": self.instance_count,
-                    "DesiredInstanceCount": self.instance_count,
-                }
-            ],
-        }
+        return {"EndpointStatus": self.status, "EndpointConfigName": self.endpoint_config}
 
     def describe_endpoint_config(self, EndpointConfigName: str) -> dict[str, Any]:  # noqa: N803
         if not self.exists:
             raise client_error("ValidationException", "Could not find endpoint configuration.", "DescribeEndpointConfig")
-        return {"ProductionVariants": [{"VariantName": "AllTraffic", "InstanceType": self.instance_type}]}
+        return {
+            "ProductionVariants": [
+                {
+                    "VariantName": self.variant_name,
+                    "InstanceType": self.instance_type,
+                    "InitialInstanceCount": self.instance_count,
+                }
+            ]
+        }
 
     def describe_model(self, ModelName: str) -> dict[str, Any]:  # noqa: N803
         if not self.exists:
