@@ -26,6 +26,9 @@ phases:
   build:
     commands:
       - |
+        # The script is written to a file and run by bash explicitly, so it does not depend on
+        # which shell the build environment uses for buildspec commands.
+        cat > /tmp/runner-build.sh <<'RUNNER_SCRIPT'
         set -euo pipefail
         rm -rf "$WORK_ROOT"
         mkdir -p "$WORK_ROOT"
@@ -93,10 +96,15 @@ phases:
         python3 -m performance.runner.cli "${runner_args[@]}" || runner_exit=$?
         printf '%s\n' "$runner_exit" > "$WORK_ROOT/runner-exit-code"
         exit "$runner_exit"
+        RUNNER_SCRIPT
+        bash /tmp/runner-build.sh
 
   post_build:
     commands:
       - |
+        # The script is written to a file and run by bash explicitly, so it does not depend on
+        # which shell the build environment uses for buildspec commands.
+        cat > /tmp/runner-post-build.sh <<'RUNNER_SCRIPT'
         set -euo pipefail
         if [[ ! "${RESULT_S3_PREFIX:-}" =~ ^s3://[^/]+/.+ ]]; then
           echo "WARNING: RESULT_S3_PREFIX is not a valid S3 URI; skipping S3 upload." >&2
@@ -111,3 +119,5 @@ phases:
         mkdir -p "$WORK_ROOT/result"
         printf '%s\n' "$exit_code" > "$WORK_ROOT/result/runner-exit-code"
         aws s3 cp "$WORK_ROOT/result" "${RESULT_S3_PREFIX%/}/" --recursive --only-show-errors
+        RUNNER_SCRIPT
+        bash /tmp/runner-post-build.sh
