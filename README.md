@@ -140,7 +140,7 @@ Application image에는 `latest` 대신 commit SHA 기반 immutable tag를 사�
 
 - **`terraform/shared`**: 네트워크, VPC Endpoint, ECR, ECS Cluster, 공통 ALB Access Logs, GitHub OIDC Provider 및 공통 IAM
 - **`terraform/dev`**: Dev API/Worker ECS, Auto Scaling, Dev RDS, Dev SQS/DLQ, Public ALB, CloudFront+S3, SSM DB Access Host, Dev SageMaker, Dev 관측성
-- **`terraform/performance-base`**: Performance RDS, Performance SQS/DLQ, Performance Internal ALB, CodeBuild Runner 프로젝트, 성능 결과 S3, 실험 전용 GitHub OIDC Role
+- **`terraform/performance-base`**: Performance RDS, Performance SQS/DLQ, Performance Internal ALB, CodeBuild Runner 프로젝트, 성능 결과 S3, 실험 전용 GitHub OIDC Role (진입점 job은 `performance-experiment` GitHub environment를 사용해야 하며, 해당 environment의 deployment branch를 `dev`로 제한)
 - **`terraform/performance-experiment`**: Performance API/Worker ECS Service·Task Definition, Synthetic Demo AI ECS Service
 
 각 root는 S3 backend에 `<root>/terraform.tfstate` 키로 독립 state를 저장하며, 하위 root는 상위 root의 output을 `terraform_remote_state`로 읽습니다.

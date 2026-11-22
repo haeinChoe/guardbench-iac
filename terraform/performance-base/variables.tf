@@ -143,20 +143,8 @@ variable "performance_experiment_github_repository" {
   default     = "haeinChoe/guardbench-iac"
 }
 
-variable "performance_experiment_workflow_path" {
-  description = "Entrypoint workflow path trusted via GitHub OIDC job_workflow_ref sub claim"
-  type        = string
-  default     = ".github/workflows/performance-experiment.yml"
-}
-
 variable "performance_experiment_github_environment" {
   description = "GitHub environment name trusted via GitHub OIDC environment sub claim"
   type        = string
   default     = "performance-experiment"
-}
-
-variable "performance_experiment_github_ref" {
-  description = "Git ref trusted for job_workflow_ref sub claims"
-  type        = string
-  default     = "refs/heads/dev"
 }

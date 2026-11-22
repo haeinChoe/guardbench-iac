@@ -55,12 +55,13 @@ data "aws_iam_policy_document" "performance_experiment_assume_role" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # GitHub environment subjects omit ref/branch. Restrict the performance-experiment
+    # environment's deployment branches to dev in repository settings.
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
         "repo:${var.performance_experiment_github_repository}:environment:${var.performance_experiment_github_environment}",
-        "repo:${var.performance_experiment_github_repository}:job_workflow_ref:${var.performance_experiment_github_repository}/${var.performance_experiment_workflow_path}@${var.performance_experiment_github_ref}",
       ]
     }
   }
