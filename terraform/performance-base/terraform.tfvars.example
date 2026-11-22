@@ -1,0 +1,17 @@
+# 실제 사용 시 terraform.tfvars로 복사 후 값을 입력하세요.
+# cp terraform.tfvars.example terraform.tfvars
+
+project     = "guardbench"
+environment = "dev"
+aws_region  = "ap-northeast-2"
+
+# shared root state 연결
+remote_state_bucket = "guardbench-terraform-state"
+remote_state_region = "ap-northeast-2"
+shared_state_key    = "shared/terraform.tfstate"
+
+# Performance RDS is an isolated, fixed dependency for performance tests.
+performance_db_instance_class          = "db.m7g.large"
+performance_db_allocated_storage       = 20
+performance_db_max_allocated_storage   = 100
+performance_db_backup_retention_period = 0
