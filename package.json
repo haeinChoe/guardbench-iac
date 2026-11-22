@@ -1,0 +1,30 @@
+{
+  "name": "guardbench-iac",
+  "private": true,
+  "type": "module",
+  "description": "Performance experiment entrypoint scripts and their tests",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"tests/performance/*.test.ts\"",
+    "test:floci": "FLOCI_PIPELINE=1 node --test --test-concurrency=1 tests/floci/pipeline.test.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudwatch": "3.1160.0",
+    "@aws-sdk/client-cloudwatch-logs": "3.1160.0",
+    "@aws-sdk/client-codebuild": "3.1160.0",
+    "@aws-sdk/client-ecs": "3.1160.0",
+    "@aws-sdk/client-rds": "3.1160.0",
+    "@aws-sdk/client-s3": "3.1160.0",
+    "@aws-sdk/client-sagemaker": "3.1160.0",
+    "@aws-sdk/client-sqs": "3.1160.0"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-ec2": "3.1160.0",
+    "@aws-sdk/client-iam": "3.1160.0",
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3"
+  }
+}
