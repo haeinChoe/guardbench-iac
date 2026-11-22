@@ -1,5 +1,9 @@
 version: 0.2
 
+# Exit codes: 0 PASS / 1 FAIL / 2 error. All setup work (input validation, checkout, tool
+# installation) runs at the start of the build phase so that a failure there is recorded as
+# runner-exit-code 2 and post_build still uploads whatever was produced.
+
 env:
   shell: bash
   variables:
@@ -19,10 +23,16 @@ phases:
     runtime-versions:
       python: "3.11"
 
-  pre_build:
+  build:
     commands:
       - |
         set -euo pipefail
+        rm -rf "$WORK_ROOT"
+        mkdir -p "$WORK_ROOT"
+
+        # Any exit before the runner reports its own code is a runner error (2).
+        trap 'status=$?; if [ ! -f "$WORK_ROOT/runner-exit-code" ]; then printf "2\n" > "$WORK_ROOT/runner-exit-code"; status=2; fi; exit "$status"' EXIT
+
         for required_var in BACKEND_COMMIT API_URL TARGET_URL TARGET_MODEL SCENARIO_PATH DATASET_PATH RESULT_S3_PREFIX; do
           if [ -z "${!required_var:-}" ]; then
             echo "ERROR: ${required_var} is required." >&2
@@ -38,7 +48,7 @@ phases:
           exit 2
         fi
 
-        rm -rf "$WORK_ROOT"
+        # Checkout the requested Backend commit.
         mkdir -p "$WORK_ROOT/repo"
         git -C "$WORK_ROOT/repo" init
         git -C "$WORK_ROOT/repo" remote add origin "$BACKEND_REPO_URL"
@@ -50,6 +60,7 @@ phases:
           exit 2
         fi
 
+        # Install the k6 version declared by the Backend commit and the Runner dependencies.
         k6_version="$(tr -d '[:space:]' < "$WORK_ROOT/repo/performance/k6/VERSION")"
         if [ -z "$k6_version" ]; then
           echo "ERROR: performance/k6/VERSION is empty." >&2
@@ -64,13 +75,8 @@ phases:
 
         python3 -m pip install --no-cache-dir -r "$WORK_ROOT/repo/performance/requirements.txt"
 
-  build:
-    commands:
-      - |
-        set -uo pipefail
-        rm -rf "$WORK_ROOT/result"
+        # Run the Runner. Its own exit code is recorded and propagated as the build result.
         cd "$WORK_ROOT/repo"
-
         runner_args=(
           --api-url "$API_URL"
           --target-url "$TARGET_URL"
@@ -92,8 +98,8 @@ phases:
     commands:
       - |
         set -euo pipefail
-        if [ -z "${RESULT_S3_PREFIX:-}" ]; then
-          echo "WARNING: RESULT_S3_PREFIX is empty; skipping S3 upload." >&2
+        if [[ ! "${RESULT_S3_PREFIX:-}" =~ ^s3://[^/]+/.+ ]]; then
+          echo "WARNING: RESULT_S3_PREFIX is not a valid S3 URI; skipping S3 upload." >&2
           exit 0
         fi
 
