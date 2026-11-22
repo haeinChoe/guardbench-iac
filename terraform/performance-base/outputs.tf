@@ -116,3 +116,31 @@ output "performance_results_bucket_arn" {
   description = "Private S3 bucket ARN for performance results"
   value       = aws_s3_bucket.performance_results.arn
 }
+
+# ============================================
+# CodeBuild Performance Runner Outputs
+# ============================================
+output "performance_codebuild_project_name" {
+  description = "CodeBuild project name running GuardBench performance scenarios"
+  value       = aws_codebuild_project.performance_runner.name
+}
+
+output "performance_codebuild_project_arn" {
+  description = "CodeBuild project ARN running GuardBench performance scenarios"
+  value       = aws_codebuild_project.performance_runner.arn
+}
+
+output "performance_codebuild_log_group_name" {
+  description = "CloudWatch Log Group storing CodeBuild performance Runner logs"
+  value       = aws_cloudwatch_log_group.performance_codebuild_runner.name
+}
+
+output "performance_codebuild_runner_role_arn" {
+  description = "IAM service role ARN assumed by the performance CodeBuild project"
+  value       = aws_iam_role.performance_codebuild_runner.arn
+}
+
+output "performance_codebuild_runner_security_group_id" {
+  description = "Security group ID attached to the private VPC performance CodeBuild Runner"
+  value       = aws_security_group.performance_codebuild_runner.id
+}

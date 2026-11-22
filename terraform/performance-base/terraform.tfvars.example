@@ -15,3 +15,9 @@ performance_db_instance_class          = "db.m7g.large"
 performance_db_allocated_storage       = 20
 performance_db_max_allocated_storage   = 100
 performance_db_backup_retention_period = 0
+
+# CodeBuild Performance Runner
+performance_codebuild_compute_type    = "BUILD_GENERAL1_MEDIUM"
+performance_codebuild_image           = "aws/codebuild/standard:7.0"
+performance_codebuild_timeout_minutes = 60
+backend_repository_url                = "https://github.com/haeinChoe/guardbench-backend.git"
