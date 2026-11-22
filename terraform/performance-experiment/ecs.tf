@@ -1,6 +1,4 @@
 locals {
-  sagemaker_classifier_endpoint_arn = trimspace(var.sagemaker_classifier_endpoint_name) != "" ? "arn:${data.aws_partition.current.partition}:sagemaker:${var.aws_region}:${data.aws_caller_identity.current.account_id}:endpoint/${var.sagemaker_classifier_endpoint_name}" : ""
-
   backend_container_base = {
     name      = "app"
     image     = "${data.terraform_remote_state.shared.outputs.ecr_repository_url}:${var.app_image_tag}"
@@ -16,7 +14,7 @@ locals {
     { name = "SERVER_PORT", value = tostring(var.api_container_port) },
     { name = "SPRING_DOCKER_COMPOSE_ENABLED", value = "false" },
     { name = "AWS_REGION", value = var.aws_region },
-    { name = "SAGEMAKER_CLASSIFIER_ENDPOINT_NAME", value = var.sagemaker_classifier_endpoint_name },
+    { name = "SAGEMAKER_CLASSIFIER_ENDPOINT_NAME", value = aws_sagemaker_endpoint.performance_classifier.name },
     { name = "SAGEMAKER_CLASSIFIER_SYSTEM_PROMPT", value = replace(var.sagemaker_classifier_system_prompt, "\r\n", "\n") },
     { name = "SAGEMAKER_CLASSIFIER_USER_PROMPT_TEMPLATE", value = replace(var.sagemaker_classifier_user_prompt_template, "\r\n", "\n") },
     { name = "SPRING_TASK_SCHEDULING_POOL_SIZE", value = "4" },
@@ -26,7 +24,6 @@ locals {
     environment = concat(local.backend_common_environment, [
       { name = "SQS_ENABLED", value = "true" },
       { name = "WORKER_ENABLED", value = "false" },
-      { name = "GUARDBENCH_WORKER_WORK_ITEMS_CONCURRENCY", value = tostring(var.performance_worker_work_items_concurrency) },
       { name = "SPRING_DATASOURCE_URL", value = "jdbc:postgresql://${data.terraform_remote_state.performance_base.outputs.performance_rds_endpoint}:${data.terraform_remote_state.performance_base.outputs.db_port}/guardbench_perf?sslmode=require" },
       { name = "GUARDBENCH_SQS_QUEUE_URLS_RESOLVE", value = data.terraform_remote_state.performance_base.outputs.performance_sqs_queue_urls["gb-run-resolve"] },
       { name = "GUARDBENCH_SQS_QUEUE_URLS_WORK_ITEMS", value = data.terraform_remote_state.performance_base.outputs.performance_sqs_queue_urls["gb-workitems"] },
@@ -54,8 +51,7 @@ locals {
   })
 
   performance_worker_container = merge(local.backend_container_base, {
-    # Worker tasks do not register with a load balancer. Keep the application
-    # port available for the common image, but expose no ECS service listener.
+    # Worker tasks poll SQS and do not attach to a target group.
     portMappings = []
     environment = concat(local.backend_common_environment, [
       { name = "SQS_ENABLED", value = "true" },
@@ -99,7 +95,8 @@ resource "aws_cloudwatch_log_group" "performance_app" {
 }
 
 resource "aws_iam_role" "performance_ecs_task_execution" {
-  name = "${var.project}-${var.environment}-performance-ecs-exec-role"
+  name                 = "${var.project}-${var.environment}-performance-ecs-exec-role"
+  permissions_boundary = data.terraform_remote_state.performance_base.outputs.experiment_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -136,7 +133,8 @@ resource "aws_iam_role_policy" "performance_ecs_exec_secrets" {
 }
 
 resource "aws_iam_role" "performance_app_task" {
-  name = "${var.project}-${var.environment}-performance-app-task-role"
+  name                 = "${var.project}-${var.environment}-performance-app-task-role"
+  permissions_boundary = data.terraform_remote_state.performance_base.outputs.experiment_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -154,15 +152,11 @@ resource "aws_iam_role" "performance_app_task" {
 }
 
 data "aws_iam_policy_document" "performance_app_task" {
-  dynamic "statement" {
-    for_each = local.sagemaker_classifier_endpoint_arn != "" ? [1] : []
-
-    content {
-      sid       = "InvokeClassifierEndpointOnly"
-      effect    = "Allow"
-      actions   = ["sagemaker:InvokeEndpoint"]
-      resources = [local.sagemaker_classifier_endpoint_arn]
-    }
+  statement {
+    sid       = "InvokeClassifierEndpointOnly"
+    effect    = "Allow"
+    actions   = ["sagemaker:InvokeEndpoint"]
+    resources = [aws_sagemaker_endpoint.performance_classifier.arn]
   }
 
   statement {
@@ -213,6 +207,7 @@ resource "aws_ecs_task_definition" "performance_app" {
   tags = {
     Name    = "${var.project}-${var.environment}-performance-app"
     Purpose = "performance-testing"
+    Role    = "api"
   }
 }
 
@@ -220,8 +215,8 @@ resource "aws_ecs_task_definition" "performance_worker" {
   family                   = "${var.project}-${var.environment}-performance-worker"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = var.performance_api_cpu
-  memory                   = var.performance_api_memory
+  cpu                      = var.performance_worker_cpu
+  memory                   = var.performance_worker_memory
 
   runtime_platform {
     cpu_architecture        = "X86_64"
@@ -244,10 +239,11 @@ resource "aws_ecs_service" "performance_app" {
   name                              = "${var.project}-${var.environment}-performance-app"
   cluster                           = data.terraform_remote_state.shared.outputs.ecs_cluster_id
   task_definition                   = aws_ecs_task_definition.performance_app.arn
-  desired_count                     = var.performance_app_enabled ? var.performance_api_desired_count : 0
+  desired_count                     = var.performance_api_desired_count
   launch_type                       = "FARGATE"
   health_check_grace_period_seconds = 120
   enable_execute_command            = true
+  wait_for_steady_state             = true
 
   network_configuration {
     subnets          = data.terraform_remote_state.shared.outputs.private_subnet_ids
@@ -269,19 +265,21 @@ resource "aws_ecs_service" "performance_app" {
     rollback = true
   }
 
-  lifecycle {
-    ignore_changes = [task_definition]
-  }
+  depends_on = [
+    aws_iam_role_policy_attachment.performance_ecs_task_execution,
+    aws_iam_role_policy.performance_ecs_exec_secrets,
+    aws_iam_role_policy.performance_app_task,
+  ]
 }
 
 resource "aws_ecs_service" "performance_worker" {
-  name                              = "${var.project}-${var.environment}-performance-worker"
-  cluster                           = data.terraform_remote_state.shared.outputs.ecs_cluster_id
-  task_definition                   = aws_ecs_task_definition.performance_worker.arn
-  desired_count                     = var.performance_app_enabled ? var.performance_worker_desired_count : 0
-  launch_type                       = "FARGATE"
-  health_check_grace_period_seconds = 120
-  enable_execute_command            = true
+  name                   = "${var.project}-${var.environment}-performance-worker"
+  cluster                = data.terraform_remote_state.shared.outputs.ecs_cluster_id
+  task_definition        = aws_ecs_task_definition.performance_worker.arn
+  desired_count          = var.performance_worker_desired_count
+  launch_type            = "FARGATE"
+  enable_execute_command = true
+  wait_for_steady_state  = true
 
   network_configuration {
     subnets          = data.terraform_remote_state.shared.outputs.private_subnet_ids
@@ -297,7 +295,9 @@ resource "aws_ecs_service" "performance_worker" {
     rollback = true
   }
 
-  lifecycle {
-    ignore_changes = [task_definition]
-  }
+  depends_on = [
+    aws_iam_role_policy_attachment.performance_ecs_task_execution,
+    aws_iam_role_policy.performance_ecs_exec_secrets,
+    aws_iam_role_policy.performance_app_task,
+  ]
 }

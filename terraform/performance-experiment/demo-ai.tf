@@ -1,9 +1,8 @@
 # OpenAI-compatible Demo AI target for integrated performance tests.
 # Demo AI is a controlled synthetic customer Application Target used to
 # isolate GuardBench performance measurements from external service variability.
-# This service deliberately has its own task definition, service, task role,
-# execution role, log group, and security group. It reuses the shared ECS
-# cluster and private subnets without becoming a backend sidecar.
+# This service deliberately defines its own task definition, service, task role,
+# execution role, log group, and security group on the shared ECS cluster.
 
 locals {
   demo_ai_container_port = 8080
@@ -20,7 +19,8 @@ resource "aws_cloudwatch_log_group" "demo_ai" {
 }
 
 resource "aws_iam_role" "demo_ai_task_execution" {
-  name = "${var.project}-${var.environment}-demo-ai-exec-role"
+  name                 = "${var.project}-${var.environment}-demo-ai-exec-role"
+  permissions_boundary = data.terraform_remote_state.performance_base.outputs.experiment_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -43,7 +43,8 @@ resource "aws_iam_role_policy_attachment" "demo_ai_task_execution" {
 }
 
 resource "aws_iam_role" "demo_ai_task" {
-  name = "${var.project}-${var.environment}-demo-ai-task-role"
+  name                 = "${var.project}-${var.environment}-demo-ai-task-role"
+  permissions_boundary = data.terraform_remote_state.performance_base.outputs.experiment_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -127,15 +128,21 @@ resource "aws_ecs_task_definition" "demo_ai" {
       }
     }
   }])
+
+  tags = {
+    Name    = "${var.project}-${var.environment}-demo-ai"
+    Purpose = "performance-testing"
+  }
 }
 
 resource "aws_ecs_service" "demo_ai" {
   name                   = "${var.project}-${var.environment}-demo-ai"
   cluster                = data.terraform_remote_state.shared.outputs.ecs_cluster_id
   task_definition        = aws_ecs_task_definition.demo_ai.arn
-  desired_count          = var.demo_ai_enabled ? var.demo_ai_desired_count : 0
+  desired_count          = var.demo_ai_desired_count
   launch_type            = "FARGATE"
   enable_execute_command = true
+  wait_for_steady_state  = true
 
   network_configuration {
     subnets          = data.terraform_remote_state.shared.outputs.private_subnet_ids
@@ -157,5 +164,8 @@ resource "aws_ecs_service" "demo_ai" {
     rollback = true
   }
 
-  depends_on = [aws_iam_role_policy_attachment.demo_ai_task_execution]
+  depends_on = [
+    aws_iam_role_policy_attachment.demo_ai_task_execution,
+    aws_iam_role_policy.demo_ai_task,
+  ]
 }
