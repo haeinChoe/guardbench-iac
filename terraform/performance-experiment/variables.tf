@@ -138,6 +138,28 @@ variable "sagemaker_classifier_user_prompt_template" {
   default     = ""
 }
 
+variable "performance_sagemaker_instance_type" {
+  description = "SageMaker ML instance type for the dedicated performance classifier endpoint"
+  type        = string
+  default     = "ml.g5.xlarge"
+
+  validation {
+    condition     = can(regex("^ml\\.[a-z0-9]+\\.[a-z0-9]+$", var.performance_sagemaker_instance_type))
+    error_message = "performance_sagemaker_instance_type must be a valid SageMaker ML instance type (for example ml.g5.xlarge)."
+  }
+}
+
+variable "performance_sagemaker_instance_count" {
+  description = "Initial instance count for the dedicated performance classifier endpoint"
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.performance_sagemaker_instance_count >= 1 && var.performance_sagemaker_instance_count == floor(var.performance_sagemaker_instance_count)
+    error_message = "performance_sagemaker_instance_count must be a positive whole number."
+  }
+}
+
 # ============================================
 # Demo AI Target 설정
 # ============================================
