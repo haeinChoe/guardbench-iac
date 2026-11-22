@@ -57,7 +57,7 @@ output "performance_worker_desired_count" {
 }
 
 # ============================================
-# Security Group / Demo AI / OIDC Outputs
+# Security Group / Demo AI Outputs
 # ============================================
 output "performance_api_security_group_id" {
   description = "Security group ID for the Performance API ECS service"
@@ -97,9 +97,4 @@ output "performance_target_model" {
 output "performance_target_revision" {
   description = "Immutable Demo AI image tag for performance-test traceability"
   value       = var.demo_ai_image_tag
-}
-
-output "backend_performance_github_actions_role_arn" {
-  description = "Role ARN used by Performance Backend GitHub Actions via OIDC"
-  value       = aws_iam_role.backend_performance_github_actions_deploy.arn
 }

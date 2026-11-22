@@ -9,7 +9,7 @@
 | [`shared/`](shared/) | `shared/terraform.tfstate` | 없음 | VPC, Public/Private Subnets, IGW, NAT Gateway, VPC Endpoints, ECR (`app`, `demo_ai`), ECS Cluster, ALB Access Logs S3, GitHub OIDC Provider 및 공통 배포 Role |
 | [`dev/`](dev/) | `dev/terraform.tfstate` | `shared` | Dev API·Worker ECS Service/Task Definition, Auto Scaling, Dev RDS, Dev SQS/DLQ, Public ALB, CloudFront+S3 Frontend, SSM DB Access Host, Dev SageMaker Classifier, Dev 관측성(CloudWatch/SNS) |
 | [`performance-base/`](performance-base/) | `performance-base/terraform.tfstate` | `shared` | Performance RDS, Performance SQS/DLQ, Performance Internal ALB 및 Target Groups, Performance Results S3 |
-| [`performance-experiment/`](performance-experiment/) | `performance-experiment/terraform.tfstate` | `shared`, `performance-base` | Performance API·Worker ECS Service/Task Definition, Synthetic Demo AI ECS Service, Performance Deploy OIDC Role |
+| [`performance-experiment/`](performance-experiment/) | `performance-experiment/terraform.tfstate` | `shared`, `performance-base` | Performance API·Worker ECS Service/Task Definition, Synthetic Demo AI ECS Service |
 
 Cross-root Security Group 규칙은 해당 규칙을 소유한 하위 root(`dev`, `performance-experiment`)에서 standalone `aws_security_group_rule` 리소스로 선언하여 상위 root의 Security Group ID에 연결합니다.
 

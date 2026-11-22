@@ -227,7 +227,7 @@ terraform apply tfplan
 | `terraform/shared` | VPC/Subnet IDs, VPC Endpoint SG/IDs, ECR URLs, ECS Cluster, ALB Access Logs Bucket, OIDC Provider/Role | [terraform/shared/outputs.tf](terraform/shared/outputs.tf) |
 | `terraform/dev` | Frontend CloudFront URL, Public ALB API URL, Dev ECS/Worker, Dev RDS/SQS, SSM Access Host, SageMaker Endpoint, Ops SNS | [terraform/dev/outputs.tf](terraform/dev/outputs.tf) |
 | `terraform/performance-base` | Performance RDS Endpoint/Secret, Performance SQS/DLQ, Internal ALB URL/Target Groups, Performance Results Bucket | [terraform/performance-base/outputs.tf](terraform/performance-base/outputs.tf) |
-| `terraform/performance-experiment` | Performance API/Worker ECS Services·Task Definitions, Demo AI Service, Target URL/Model/Revision, Performance Deploy Role | [terraform/performance-experiment/outputs.tf](terraform/performance-experiment/outputs.tf) |
+| `terraform/performance-experiment` | Performance API/Worker ECS Services·Task Definitions, Demo AI Service, Target URL/Model/Revision | [terraform/performance-experiment/outputs.tf](terraform/performance-experiment/outputs.tf) |
 
 ---
 

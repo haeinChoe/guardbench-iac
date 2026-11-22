@@ -22,7 +22,7 @@ locals {
     { name = "SPRING_TASK_SCHEDULING_POOL_SIZE", value = "4" },
   ]
 
-  backend_performance_api_container = merge(local.backend_container_base, {
+  performance_api_container = merge(local.backend_container_base, {
     environment = concat(local.backend_common_environment, [
       { name = "SQS_ENABLED", value = "true" },
       { name = "WORKER_ENABLED", value = "false" },
@@ -53,7 +53,7 @@ locals {
     }
   })
 
-  backend_performance_worker_container = merge(local.backend_container_base, {
+  performance_worker_container = merge(local.backend_container_base, {
     # Worker tasks do not register with a load balancer. Keep the application
     # port available for the common image, but expose no ECS service listener.
     portMappings = []
@@ -208,7 +208,7 @@ resource "aws_ecs_task_definition" "performance_app" {
   execution_role_arn = aws_iam_role.performance_ecs_task_execution.arn
   task_role_arn      = aws_iam_role.performance_app_task.arn
 
-  container_definitions = jsonencode([local.backend_performance_api_container])
+  container_definitions = jsonencode([local.performance_api_container])
 
   tags = {
     Name    = "${var.project}-${var.environment}-performance-app"
@@ -231,7 +231,7 @@ resource "aws_ecs_task_definition" "performance_worker" {
   execution_role_arn = aws_iam_role.performance_ecs_task_execution.arn
   task_role_arn      = aws_iam_role.performance_app_task.arn
 
-  container_definitions = jsonencode([local.backend_performance_worker_container])
+  container_definitions = jsonencode([local.performance_worker_container])
 
   tags = {
     Name    = "${var.project}-${var.environment}-performance-worker"
