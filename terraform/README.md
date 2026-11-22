@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | [`shared/`](shared/) | `shared/terraform.tfstate` | 없음 | VPC, Public/Private Subnets, IGW, NAT Gateway, VPC Endpoints, ECR (`app`, `demo_ai`), ECS Cluster, ALB Access Logs S3, GitHub OIDC Provider 및 공통 배포 Role |
 | [`dev/`](dev/) | `dev/terraform.tfstate` | `shared` | Dev API·Worker ECS Service/Task Definition, Auto Scaling, Dev RDS, Dev SQS/DLQ, Public ALB, CloudFront+S3 Frontend, SSM DB Access Host, Dev SageMaker Classifier, Dev 관측성(CloudWatch/SNS) |
-| [`performance-base/`](performance-base/) | `performance-base/terraform.tfstate` | `shared` | Performance RDS, Performance SQS/DLQ, Performance Internal ALB 및 Target Groups, Performance Results S3 |
+| [`performance-base/`](performance-base/) | `performance-base/terraform.tfstate` | `shared` | Performance RDS, Performance SQS/DLQ, Performance Internal ALB 및 Target Groups, CodeBuild Runner, Performance Results S3, 실험 전용 OIDC Role |
 | [`performance-experiment/`](performance-experiment/) | `performance-experiment/terraform.tfstate` | `shared`, `performance-base` | Performance API·Worker ECS Service/Task Definition, Synthetic Demo AI ECS Service |
 
 Cross-root Security Group 규칙은 해당 규칙을 소유한 하위 root(`dev`, `performance-experiment`)에서 standalone `aws_security_group_rule` 리소스로 선언하여 상위 root의 Security Group ID에 연결합니다.
@@ -72,8 +72,15 @@ terraform apply tfplan
 
 ### `performance-base`
 
-- 성능 테스트 기간 동안 Dev RDS·SQS와 격리된 Performance 전용 PostgreSQL(`guardbench_perf`), Performance SQS/DLQ(`visibility_timeout_seconds = 90`), Internal Performance ALB(`/v1/chat/completions` 경로는 Demo AI target group으로 분기), 결과 보관 S3 버킷(완료 결과 30일 만료)을 소유합니다.
+- 성능 테스트 기간 동안 Dev RDS·SQS와 격리된 Performance 전용 PostgreSQL(`guardbench_perf`), Performance SQS/DLQ(`visibility_timeout_seconds = 90`), Internal Performance ALB(`/v1/chat/completions` 경로는 Demo AI target group으로 분기), 결과 보관 S3 버킷(AES256 암호화, public access 차단, `performance/results/` 30일 만료 lifecycle)을 소유합니다.
 - Performance RDS의 instance class, storage, backup retention 변수는 명시적 입력으로 고정합니다.
+- **CodeBuild Performance Runner**:
+  - `shared`의 private subnet과 전용 Security Group(`performance_codebuild_runner_security_group_id`)에 배치하며, 내부 Performance ALB(API·Demo AI 경로)와 VPC Endpoint·S3 Gateway 및 HTTPS egress(Backend checkout, `k6` release, Python 패키지 설치)만 허용합니다.
+  - Terraform `aws_codebuild_project.performance_runner`는 `NO_SOURCE`와 `file("../../codebuild/performance-runner.buildspec.yml")`로 [buildspec](../codebuild/performance-runner.buildspec.yml)을 프로젝트 정의에 직접 포함합니다. compute type(`performance_codebuild_compute_type`)과 timeout(`performance_codebuild_timeout_minutes`)은 변수로 관리합니다.
+  - buildspec은 공개 Backend 저장소(`haeinChoe/guardbench-backend`)를 지정한 40자리 commit SHA(`BACKEND_COMMIT`)로 checkout한 뒤 `performance/k6/VERSION`의 `k6`를 설치하고, ADR 0017 CLI 인자(`--api-url`, `--target-url`, `--target-model`, 선택적 `--target-revision`, `--scenario`, `--dataset`, `--result-dir`)로 Runner를 실행합니다. 종료 코드(`0` PASS / `1` FAIL / `2` 오류)를 결과 디렉터리의 `runner-exit-code` 파일과 함께 `RESULT_S3_PREFIX`에 업로드하고 동일 종료 코드를 build 결과로 전달합니다.
+- **실험 전용 GitHub OIDC Role**(`performance_experiment_github_actions_role_arn`):
+  - `haeinChoe/guardbench-iac`의 진입점 workflow(`.github/workflows/performance-experiment.yml` `job_workflow_ref` 또는 `performance-experiment` GitHub environment)만 신뢰합니다.
+  - `performance-experiment` state 읽기·쓰기와 실험 층 자원(ECS·SageMaker·IAM PassRole 범위 제한·Logs·실험용 SG/규칙) apply/destroy, Runner CodeBuild 시작·중지·조회, 결과 S3, 성능 CloudWatch 지표·로그·SQS·RDS 조회만 허용하며 dev 자원 ARN은 포함하지 않습니다.
 
 ### `performance-experiment`
 
