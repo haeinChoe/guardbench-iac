@@ -1,0 +1,113 @@
+version: 0.2
+
+# Exit codes: 0 PASS / 1 FAIL / 2 error. All setup work (input validation, checkout, tool
+# installation) runs at the start of the build phase so that a failure there is recorded as
+# runner-exit-code 2 and post_build still uploads whatever was produced.
+
+env:
+  shell: bash
+  variables:
+    BACKEND_REPO_URL: "https://github.com/haeinChoe/guardbench-backend.git"
+    WORK_ROOT: "/tmp/guardbench-runner"
+    BACKEND_COMMIT: ""
+    API_URL: ""
+    TARGET_URL: ""
+    TARGET_MODEL: ""
+    TARGET_REVISION: ""
+    SCENARIO_PATH: ""
+    DATASET_PATH: ""
+    RESULT_S3_PREFIX: ""
+
+phases:
+  install:
+    runtime-versions:
+      python: "3.11"
+
+  build:
+    commands:
+      - |
+        set -euo pipefail
+        rm -rf "$WORK_ROOT"
+        mkdir -p "$WORK_ROOT"
+
+        # Any exit before the runner reports its own code is a runner error (2).
+        trap 'status=$?; if [ ! -f "$WORK_ROOT/runner-exit-code" ]; then printf "2\n" > "$WORK_ROOT/runner-exit-code"; status=2; fi; exit "$status"' EXIT
+
+        for required_var in BACKEND_COMMIT API_URL TARGET_URL TARGET_MODEL SCENARIO_PATH DATASET_PATH RESULT_S3_PREFIX; do
+          if [ -z "${!required_var:-}" ]; then
+            echo "ERROR: ${required_var} is required." >&2
+            exit 2
+          fi
+        done
+        if [[ ! "$BACKEND_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "ERROR: BACKEND_COMMIT must be a 40-character lowercase hexadecimal Git SHA." >&2
+          exit 2
+        fi
+        if [[ ! "$RESULT_S3_PREFIX" =~ ^s3://[^/]+/.+ ]]; then
+          echo "ERROR: RESULT_S3_PREFIX must be an S3 URI with a bucket and prefix." >&2
+          exit 2
+        fi
+
+        # Checkout the requested Backend commit.
+        mkdir -p "$WORK_ROOT/repo"
+        git -C "$WORK_ROOT/repo" init
+        git -C "$WORK_ROOT/repo" remote add origin "$BACKEND_REPO_URL"
+        git -C "$WORK_ROOT/repo" fetch --depth 1 origin "$BACKEND_COMMIT" || git -C "$WORK_ROOT/repo" fetch origin
+        git -C "$WORK_ROOT/repo" checkout --detach "$BACKEND_COMMIT"
+        resolved_commit="$(git -C "$WORK_ROOT/repo" rev-parse HEAD)"
+        if [ "$resolved_commit" != "$BACKEND_COMMIT" ]; then
+          echo "ERROR: Checked out commit (${resolved_commit}) does not match BACKEND_COMMIT (${BACKEND_COMMIT})." >&2
+          exit 2
+        fi
+
+        # Install the k6 version declared by the Backend commit and the Runner dependencies.
+        k6_version="$(tr -d '[:space:]' < "$WORK_ROOT/repo/performance/k6/VERSION")"
+        if [ -z "$k6_version" ]; then
+          echo "ERROR: performance/k6/VERSION is empty." >&2
+          exit 2
+        fi
+        curl --fail --location --silent --show-error \
+          "https://github.com/grafana/k6/releases/download/v${k6_version}/k6-v${k6_version}-linux-amd64.tar.gz" \
+          | tar --extract --gzip --strip-components=1 --directory=/usr/local/bin \
+            "k6-v${k6_version}-linux-amd64/k6"
+        chmod 0755 /usr/local/bin/k6
+        k6 version
+
+        python3 -m pip install --no-cache-dir -r "$WORK_ROOT/repo/performance/requirements.txt"
+
+        # Run the Runner. Its own exit code is recorded and propagated as the build result.
+        cd "$WORK_ROOT/repo"
+        runner_args=(
+          --api-url "$API_URL"
+          --target-url "$TARGET_URL"
+          --target-model "$TARGET_MODEL"
+          --scenario "$SCENARIO_PATH"
+          --dataset "$DATASET_PATH"
+          --result-dir "$WORK_ROOT/result"
+        )
+        if [ -n "${TARGET_REVISION:-}" ]; then
+          runner_args+=(--target-revision "$TARGET_REVISION")
+        fi
+
+        runner_exit=0
+        python3 -m performance.runner.cli "${runner_args[@]}" || runner_exit=$?
+        printf '%s\n' "$runner_exit" > "$WORK_ROOT/runner-exit-code"
+        exit "$runner_exit"
+
+  post_build:
+    commands:
+      - |
+        set -euo pipefail
+        if [[ ! "${RESULT_S3_PREFIX:-}" =~ ^s3://[^/]+/.+ ]]; then
+          echo "WARNING: RESULT_S3_PREFIX is not a valid S3 URI; skipping S3 upload." >&2
+          exit 0
+        fi
+
+        exit_code=2
+        if [ -f "$WORK_ROOT/runner-exit-code" ]; then
+          exit_code="$(tr -d '[:space:]' < "$WORK_ROOT/runner-exit-code")"
+        fi
+
+        mkdir -p "$WORK_ROOT/result"
+        printf '%s\n' "$exit_code" > "$WORK_ROOT/result/runner-exit-code"
+        aws s3 cp "$WORK_ROOT/result" "${RESULT_S3_PREFIX%/}/" --recursive --only-show-errors

@@ -70,3 +70,114 @@ variable "performance_db_backup_retention_period" {
   description = "Configured backup retention period in days for the isolated Performance RDS"
   type        = number
 }
+
+# ============================================
+# CodeBuild Performance Runner 설정
+# ============================================
+variable "performance_codebuild_compute_type" {
+  description = "CodeBuild compute type for executing k6 and the Python performance runner"
+  type        = string
+  default     = "BUILD_GENERAL1_MEDIUM"
+
+  validation {
+    condition     = can(regex("^BUILD_GENERAL1_[A-Z0-9]+$", var.performance_codebuild_compute_type))
+    error_message = "performance_codebuild_compute_type must be a valid CodeBuild BUILD_GENERAL1 compute type."
+  }
+}
+
+variable "performance_codebuild_image" {
+  description = "CodeBuild managed container image with Python 3.11 runtime support"
+  type        = string
+  default     = "aws/codebuild/standard:7.0"
+
+  validation {
+    condition     = trimspace(var.performance_codebuild_image) != ""
+    error_message = "performance_codebuild_image must not be empty."
+  }
+}
+
+variable "performance_codebuild_timeout_minutes" {
+  description = "CodeBuild execution timeout in minutes (adjust later when SOAK profile duration is finalized)"
+  type        = number
+  default     = 60
+
+  validation {
+    condition = (
+      var.performance_codebuild_timeout_minutes >= 5 &&
+      var.performance_codebuild_timeout_minutes <= 480 &&
+      var.performance_codebuild_timeout_minutes == floor(var.performance_codebuild_timeout_minutes)
+    )
+    error_message = "performance_codebuild_timeout_minutes must be a whole number from 5 through 480."
+  }
+}
+
+variable "backend_repository_url" {
+  description = "Public Git repository URL checked out by CodeBuild at BACKEND_COMMIT"
+  type        = string
+  default     = "https://github.com/haeinChoe/guardbench-backend.git"
+
+  validation {
+    condition     = can(regex("^https://github\\.com/[^/]+/[^/]+\\.git$", var.backend_repository_url))
+    error_message = "backend_repository_url must be an HTTPS GitHub repository URL ending in .git."
+  }
+}
+
+# ============================================
+# Performance Experiment OIDC Role 설정
+# ============================================
+variable "performance_base_state_key" {
+  description = "Remote state key for the performance-base root"
+  type        = string
+  default     = "performance-base/terraform.tfstate"
+}
+
+variable "performance_experiment_state_key" {
+  description = "Remote state key for the performance-experiment root"
+  type        = string
+  default     = "performance-experiment/terraform.tfstate"
+}
+
+variable "performance_experiment_github_repository" {
+  description = "GitHub repository allowed to assume the performance experiment OIDC role"
+  type        = string
+  default     = "haeinChoe/guardbench-iac"
+}
+
+variable "performance_experiment_github_environment" {
+  description = "GitHub environment name trusted via GitHub OIDC environment sub claim"
+  type        = string
+  default     = "performance-experiment"
+}
+
+variable "performance_experiment_workflow_path" {
+  description = "Path of the entrypoint workflow file in the trusted repository; the OIDC job_workflow_ref claim must be <repository>/<path>@<ref>"
+  type        = string
+  default     = ".github/workflows/performance-experiment.yml"
+
+  validation {
+    condition     = can(regex("^\\.github/workflows/[^/]+\\.ya?ml$", var.performance_experiment_workflow_path))
+    error_message = "performance_experiment_workflow_path must be a workflow file directly under .github/workflows/."
+  }
+}
+
+variable "performance_experiment_workflow_ref" {
+  description = "Git ref of the entrypoint workflow the OIDC job_workflow_ref claim must carry"
+  type        = string
+  default     = "refs/heads/dev"
+
+  validation {
+    condition     = can(regex("^refs/heads/[^*?\\s]+$", var.performance_experiment_workflow_ref))
+    error_message = "performance_experiment_workflow_ref must be a branch ref such as refs/heads/dev."
+  }
+}
+
+variable "performance_experiment_github_repository_id" {
+  description = "Numeric GitHub ID of performance_experiment_github_repository, matched against the OIDC repository_id claim (haeinChoe/guardbench-iac)"
+  type        = string
+  default     = "1387017401"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.performance_experiment_github_repository_id))
+    error_message = "performance_experiment_github_repository_id must be a numeric GitHub repository ID."
+  }
+}

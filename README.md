@@ -24,10 +24,10 @@ dev (상시, shared 참조)
  └─ Dev SageMaker Classifier Endpoint, CloudWatch/SNS 관측성
 
 performance-base (상시, shared 참조)
- ├─ Performance RDS (격리 DB)
- ├─ Performance SQS/DLQ
+ ├─ Performance RDS (격리 DB), SQS/DLQ
  ├─ Performance Internal ALB + Target Groups
- └─ Performance Results S3 Bucket
+ ├─ CodeBuild Performance Runner (`codebuild/performance-runner.buildspec.yml`)
+ └─ Performance Results S3 Bucket · 실험 전용 GitHub OIDC Role
 
 performance-experiment (shared · performance-base 참조)
  ├─ Performance API / Worker ECS Service 및 Task Definition
@@ -139,7 +139,7 @@ performance-experiment:
 
 - **`terraform/shared`**: 네트워크, VPC Endpoint, ECR, ECS Cluster, 공통 ALB Access Logs, GitHub OIDC Provider 및 공통 IAM
 - **`terraform/dev`**: Dev API/Worker ECS, Auto Scaling, Dev RDS, Dev SQS/DLQ, Public ALB, CloudFront+S3, SSM DB Access Host, Dev SageMaker, Dev 관측성
-- **`terraform/performance-base`**: Performance RDS, Performance SQS/DLQ, Performance Internal ALB, 성능 결과 S3
+- **`terraform/performance-base`**: Performance RDS, Performance SQS/DLQ, Performance Internal ALB, CodeBuild Runner 프로젝트, 성능 결과 S3, 실험 전용 GitHub OIDC Role과 실험 role용 permissions boundary (진입점 job은 `performance-experiment` GitHub environment를 사용해야 하며, 해당 environment의 deployment branch를 `dev`로 제한. 토큰은 진입점 workflow 파일의 `refs/heads/dev` 기준 `job_workflow_ref`와 `repository_id`도 만족해야 함)
 - **`terraform/performance-experiment`**: Performance API/Worker ECS Service·Task Definition, Performance 전용 SageMaker Endpoint, Synthetic Demo AI ECS Service
 
 각 root는 S3 backend에 `<root>/terraform.tfstate` 키로 독립 state를 저장하며, 하위 root는 상위 root의 output을 `terraform_remote_state`로 읽습니다.
@@ -152,7 +152,7 @@ performance-experiment:
 | --- | --- |
 | `terraform/shared` | VPC, Public/Private Subnet, NAT Gateway, VPC Endpoints, ECR (`app`, `demo_ai`), ECS Cluster, ALB Access Logs S3, GitHub OIDC Provider |
 | `terraform/dev` | Public ALB, CloudFront, Frontend S3, Dev ECS Services/Task Definitions, Application Auto Scaling, Dev RDS, SSM Access Host, Dev SQS/DLQ, SageMaker Endpoint, CloudWatch/SNS |
-| `terraform/performance-base` | Performance RDS, Performance SQS/DLQ, Performance Internal ALB, Performance Results S3 |
+| `terraform/performance-base` | Performance RDS, Performance SQS/DLQ, Performance Internal ALB, CodeBuild Runner, Performance Results S3, 실험 전용 OIDC Role, 실험 role permissions boundary |
 | `terraform/performance-experiment` | Performance API/Worker ECS Services/Task Definitions, Performance SageMaker Endpoint, Demo AI ECS Service |
 
 ---
@@ -163,6 +163,8 @@ performance-experiment:
 guardbench-iac/
 ├─ bootstrap/
 │  └─ setup-remote-state.ps1
+├─ codebuild/
+│  └─ performance-runner.buildspec.yml
 ├─ docs/
 │  └─ decisions/
 │     └─ 0001-performance-experiment-platform.md
@@ -227,7 +229,7 @@ terraform apply tfplan
 | --- | --- | --- |
 | `terraform/shared` | VPC/Subnet IDs, VPC Endpoint SG/IDs, ECR URLs, ECS Cluster, ALB Access Logs Bucket, OIDC Provider/Role | [terraform/shared/outputs.tf](terraform/shared/outputs.tf) |
 | `terraform/dev` | Frontend CloudFront URL, Public ALB API URL, Dev ECS/Worker, Dev RDS/SQS, SSM Access Host, SageMaker Endpoint, Ops SNS | [terraform/dev/outputs.tf](terraform/dev/outputs.tf) |
-| `terraform/performance-base` | Performance RDS Endpoint/Secret, Performance SQS/DLQ, Internal ALB URL/Target Groups, Performance Results Bucket | [terraform/performance-base/outputs.tf](terraform/performance-base/outputs.tf) |
+| `terraform/performance-base` | Performance RDS Endpoint/Secret, Performance SQS/DLQ, Internal ALB URL/Target Groups, Performance Results Bucket, CodeBuild Project/SG, Experiment OIDC Role | [terraform/performance-base/outputs.tf](terraform/performance-base/outputs.tf) |
 | `terraform/performance-experiment` | `infrastructure_snapshot`, Performance API/Worker ECS·Task Definitions, Performance SageMaker Endpoint, Demo AI Service, Target 연결 정보 | [terraform/performance-experiment/outputs.tf](terraform/performance-experiment/outputs.tf) |
 
 ---
