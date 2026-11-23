@@ -303,7 +303,7 @@ jobs:
           if-no-files-found: ignore
 
       # Last on purpose: the job fails here, after destroy and evidence preservation, unless
-      # every stage passed and the final verdict is PASS.
+      # every stage passed and the final verdict is PASS. The decision lives in gate.ts.
       - name: Fail unless the experiment passed
         if: always()
         env:
@@ -311,12 +311,8 @@ jobs:
           DESTROY_OUTCOME: ${{ steps.destroy.outcome }}
           VERIFY_OUTCOME: ${{ steps.verify_destroy.outcome }}
         run: |
-          verdict="missing"
-          if [ -f "$EXP_DIR/final.json" ]; then
-            verdict="$(jq -r '.status' "$EXP_DIR/final.json")"
-          fi
-          echo "apply=$APPLY_OUTCOME verdict=$verdict destroy=$DESTROY_OUTCOME verify=$VERIFY_OUTCOME"
-          if [ "$APPLY_OUTCOME" != "success" ] || [ "$verdict" != "PASS" ] || [ "$DESTROY_OUTCOME" != "success" ] || [ "$VERIFY_OUTCOME" != "success" ]; then
-            echo "::error::The experiment did not pass: apply=$APPLY_OUTCOME verdict=$verdict destroy=$DESTROY_OUTCOME verify=$VERIFY_OUTCOME"
-            exit 1
-          fi
+          node scripts/performance/gate.ts \
+            --apply-outcome "$APPLY_OUTCOME" \
+            --destroy-outcome "$DESTROY_OUTCOME" \
+            --verify-outcome "$VERIFY_OUTCOME" \
+            --final "$EXP_DIR/final.json"
