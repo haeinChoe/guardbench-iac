@@ -1,6 +1,8 @@
 name: Decision
 description: 구현 전에 필요한 인프라 설계 결정과 승인 근거를 준비합니다.
 title: "[Decision] "
+labels:
+  - decision
 body:
   - type: markdown
     attributes:
