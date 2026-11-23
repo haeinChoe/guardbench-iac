@@ -291,11 +291,14 @@ export class FakeSqs {
 export class FakeCloudWatch {
   values: Record<string, number[]> = {};
   error: Error | null = null;
+  /** The time range of every query, in order. */
+  ranges: { start: Date; end: Date }[] = [];
 
   async send(command: unknown): Promise<Dict> {
     if (commandName(command) !== "GetMetricDataCommand") {
       return unsupported(command);
     }
+    this.ranges.push({ start: inputOf(command).StartTime, end: inputOf(command).EndTime });
     if (this.error) {
       throw this.error;
     }

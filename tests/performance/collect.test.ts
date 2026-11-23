@@ -13,7 +13,7 @@ import { byName, notPassing, tempDirectory } from "./helpers.ts";
 
 const START = new Date(Date.UTC(2026, 10, 22, 1, 0));
 const END = new Date(Date.UTC(2026, 10, 22, 1, 10));
-const NO_WAIT: TimeHooks = { sleep: async () => {}, monotonic: () => 0 };
+const NO_WAIT: TimeHooks = { sleep: async () => {}, monotonic: () => 0, now: () => END };
 
 describe("collect", () => {
   let snapshot: Dict;
@@ -29,7 +29,7 @@ describe("collect", () => {
   // ticks one second per reading.
   const run = (drainTimeout = 0) => {
     let now = 0;
-    const hooks: TimeHooks = drainTimeout === 0 ? NO_WAIT : { sleep: async () => {}, monotonic: () => now++ };
+    const hooks: TimeHooks = drainTimeout === 0 ? NO_WAIT : { ...NO_WAIT, monotonic: () => now++ };
     return collect(snapshot, clients, START, END, drainTimeout, 0, hooks);
   };
 
@@ -129,6 +129,105 @@ describe("collect", () => {
     assert.equal(code, 0);
     assert.equal(JSON.parse(readFileSync(join(root, "infra.json"), "utf-8")).status, PASS);
     assert.deepEqual(JSON.parse(readFileSync(join(root, "logs.json"), "utf-8")), []);
+  });
+
+  describe("metric settle", () => {
+    const BUILD_END = new Date(Date.UTC(2026, 10, 22, 1, 12));
+    const plus = (date: Date, seconds: number) => new Date(date.getTime() + seconds * 1000);
+
+    const settled = async (now: Date, settleSeconds: number, buildEnd: Date | null = BUILD_END) => {
+      const sleeps: number[] = [];
+      const hooks: TimeHooks = { sleep: async (seconds) => void sleeps.push(seconds), monotonic: () => 0, now: () => now };
+      const { infrastructure } = await collect(snapshot, clients, START, END, 0, 0, hooks, { buildEnd, seconds: settleSeconds });
+      return { sleeps, infrastructure, range: fakes.cloudwatch.ranges[0] };
+    };
+
+    it("waits until the build end plus the settle period and queries up to then", async () => {
+      const { sleeps, range, infrastructure } = await settled(plus(BUILD_END, 60), 180);
+      assert.deepEqual(sleeps, [120]);
+      assert.equal(range.end.getTime(), plus(BUILD_END, 180).getTime());
+      assert.equal(range.start.getTime(), START.getTime());
+      assert.equal(infrastructure.metrics_window.end, "2026-11-22T01:15:00+00:00");
+      assert.equal(infrastructure.window.end, "2026-11-22T01:10:00+00:00");
+    });
+
+    it("does not wait when the settle period has already passed", async () => {
+      const { sleeps, range } = await settled(plus(BUILD_END, 400), 180);
+      assert.deepEqual(sleeps, []);
+      assert.equal(range.end.getTime(), plus(BUILD_END, 180).getTime());
+    });
+
+    it("does not wait for a settle period of zero", async () => {
+      const { sleeps, range } = await settled(BUILD_END, 0);
+      assert.deepEqual(sleeps, []);
+      assert.equal(range.end.getTime(), BUILD_END.getTime());
+    });
+
+    it("never waits longer than the settle period", async () => {
+      const { sleeps } = await settled(plus(BUILD_END, -3600), 180);
+      assert.deepEqual(sleeps, [180]);
+    });
+
+    it("queries up to the window end when the build end is unknown", async () => {
+      const { sleeps, range } = await settled(END, 180, null);
+      assert.deepEqual(sleeps, []);
+      assert.equal(range.end.getTime(), END.getTime());
+    });
+
+    it("drains the queues before it waits for the metrics", async () => {
+      const order: string[] = [];
+      const sqsSend = fakes.sqs.send.bind(fakes.sqs);
+      fakes.sqs.send = async (command: unknown) => {
+        order.push("sqs");
+        return sqsSend(command);
+      };
+      const hooks: TimeHooks = { ...NO_WAIT, sleep: async () => void order.push("sleep"), now: () => BUILD_END };
+      await collect(snapshot, clients, START, END, 0, 0, hooks, { buildEnd: BUILD_END, seconds: 180 });
+      assert.ok(order.lastIndexOf("sqs") < order.indexOf("sleep"), order.join(","));
+    });
+
+    const cli = (root: string, extra: string[]) =>
+      main(
+        [
+          "--snapshot", join(root, "snapshot.json"),
+          "--build", join(root, "build.json"),
+          "--output", join(root, "infra.json"),
+          "--logs-output", join(root, "logs.json"),
+          "--drain-timeout-seconds", "0",
+          ...extra,
+        ],
+        clients,
+        { ...NO_WAIT, now: () => plus(BUILD_END, 3600) },
+      );
+
+    const prepare = (t: unknown) => {
+      const root = tempDirectory(t as never);
+      writeFileSync(join(root, "snapshot.json"), JSON.stringify(snapshot), "utf-8");
+      writeFileSync(
+        join(root, "build.json"),
+        JSON.stringify({ start_time: "2026-11-22T01:00:00Z", end_time: "2026-11-22T01:12:00Z" }),
+        "utf-8",
+      );
+      return root;
+    };
+
+    it("uses 180 seconds by default and the build end from the build summary", async (t) => {
+      const root = prepare(t);
+      assert.equal(await cli(root, []), 0);
+      assert.equal(fakes.cloudwatch.ranges[0].end.getTime(), plus(BUILD_END, 180).getTime());
+    });
+
+    it("takes the settle period from --metrics-settle-seconds", async (t) => {
+      const root = prepare(t);
+      assert.equal(await cli(root, ["--metrics-settle-seconds", "0"]), 0);
+      assert.equal(fakes.cloudwatch.ranges[0].end.getTime(), BUILD_END.getTime());
+    });
+
+    it("keeps an explicit --end", async (t) => {
+      const root = prepare(t);
+      assert.equal(await cli(root, ["--start", "2026-11-22T01:00:00Z", "--end", "2026-11-22T01:10:00Z"]), 0);
+      assert.equal(fakes.cloudwatch.ranges[0].end.getTime(), END.getTime());
+    });
   });
 
   it("prefers explicit window values, then the Runner result, then the build", (t) => {

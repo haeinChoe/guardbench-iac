@@ -2,6 +2,8 @@
 //
 // Collected: queue drain and DLQ state, CloudWatch metrics of the ECS services, the RDS
 // instance and the SageMaker endpoint, and ECS log events of every TestRun in the window.
+// CloudWatch publishes datapoints with a delay, so the metric query ends a settle period after
+// the build ended and the collection waits until then.
 // Infrastructure verdict: PASS when every source queue drains and every DLQ is empty and
 // all evidence could be read; FAIL when a queue does not drain or a DLQ holds messages;
 // ERROR when any evidence could not be read. Resource utilization is recorded, not judged:
@@ -25,6 +27,7 @@ import {
   dig,
   errorCheck,
   isoWithOffset,
+  log,
   monotonic,
   numberOption,
   optionalString,
@@ -43,15 +46,25 @@ import {
 import type { Check, Clients, Dict, QueueDepth } from "./common.ts";
 
 const METRIC_PERIOD_SECONDS = 60;
+export const DEFAULT_METRICS_SETTLE_SECONDS = 180;
 const MAX_LOG_SAMPLE_EVENTS = 500;
 
 /** Time hooks, replaceable in tests. */
 export interface TimeHooks {
   sleep: (seconds: number) => Promise<void>;
   monotonic: () => number;
+  /** Wall clock, compared with the end of the build. */
+  now: () => Date;
 }
 
-const DEFAULT_HOOKS: TimeHooks = { sleep, monotonic };
+const DEFAULT_HOOKS: TimeHooks = { sleep, monotonic, now: () => new Date() };
+
+/** When the metric query ends: a settle period after the build ended. */
+export interface MetricsSettle {
+  /** End of the build, or null when it is not known (the window end is used as is). */
+  buildEnd: Date | null;
+  seconds: number;
+}
 
 /** Poll the source queues until they are all empty or the timeout passes. */
 export async function waitForDrain(
@@ -267,6 +280,7 @@ export async function collect(
   drainTimeoutSeconds: number,
   drainPollSeconds: number,
   hooks: TimeHooks = DEFAULT_HOOKS,
+  settle: MetricsSettle = { buildEnd: null, seconds: DEFAULT_METRICS_SETTLE_SECONDS },
 ): Promise<{ infrastructure: Dict; logSample: LogSampleEvent[] }> {
   const checks: Check[] = [];
   const sqs = clients.sqs;
@@ -286,9 +300,20 @@ export async function collect(
   }
   checks.push(...queueChecks(deadLetterDepths, deadLetterErrors, "dlq_empty"));
 
+  let metricsEnd = end;
+  if (settle.buildEnd !== null) {
+    metricsEnd = new Date(settle.buildEnd.getTime() + settle.seconds * 1000);
+    // The wait is bounded by the settle period even if the clocks disagree.
+    const remaining = Math.min((metricsEnd.getTime() - hooks.now().getTime()) / 1000, settle.seconds);
+    if (remaining > 0) {
+      log(`waiting ${Math.ceil(remaining)}s for CloudWatch metrics to settle after the build`);
+      await hooks.sleep(remaining);
+    }
+  }
+
   let metrics: Record<string, MetricSummary>;
   try {
-    metrics = await collectMetrics(clients.cloudwatch, snapshot, start, end);
+    metrics = await collectMetrics(clients.cloudwatch, snapshot, start, metricsEnd);
     checks.push(check("metrics.collection", PASS, null, `${Object.keys(metrics).length} series`));
   } catch (exc) {
     metrics = {};
@@ -306,6 +331,7 @@ export async function collect(
   const infrastructure = {
     status: overall(checks),
     window: { start: isoWithOffset(start), end: isoWithOffset(end) },
+    metrics_window: { start: isoWithOffset(start), end: isoWithOffset(metricsEnd) },
     queues: { source: source.depths, dead_letter: deadLetterDepths },
     metrics,
     logs: logs.counts,
@@ -314,7 +340,8 @@ export async function collect(
   return { infrastructure, logSample: logs.sample };
 }
 
-/** Pick the experiment window: explicit values, else the Runner result, else the build times. */
+/** Pick the experiment window: explicit values, else the Runner result, else the build times.
+ * The metric query then ends a settle period after the build ended, unless --end is explicit. */
 export function resolveWindow(
   start: string | undefined,
   end: string | undefined,
@@ -344,6 +371,11 @@ export function resolveWindow(
   throw new Error("no experiment window: pass --start/--end or provide a Runner result or build summary");
 }
 
+/** The end time of the build summary, or null when the build has none (not finished, no summary). */
+function buildEndTime(build: Dict | null): Date | null {
+  return build && typeof build.end_time === "string" && build.end_time !== "" ? parseIso(build.end_time) : null;
+}
+
 export async function main(argv: string[], clients: Clients, hooks: TimeHooks = DEFAULT_HOOKS): Promise<number> {
   return withUsageErrors(async () => {
     const args = parseCli(argv, {
@@ -356,6 +388,7 @@ export async function main(argv: string[], clients: Clients, hooks: TimeHooks = 
       "logs-output": requiredString,
       "drain-timeout-seconds": numberOption(300),
       "drain-poll-seconds": numberOption(10),
+      "metrics-settle-seconds": numberOption(DEFAULT_METRICS_SETTLE_SECONDS),
     });
     let infrastructure: Dict;
     let logSample: LogSampleEvent[];
@@ -371,6 +404,7 @@ export async function main(argv: string[], clients: Clients, hooks: TimeHooks = 
         args["drain-timeout-seconds"],
         args["drain-poll-seconds"],
         hooks,
+        { buildEnd: args.end ? null : buildEndTime(build), seconds: args["metrics-settle-seconds"] },
       ));
     } catch (exc) {
       writeJson(args.output, { status: ERROR, checks: [errorCheck("collect", exc)] });
