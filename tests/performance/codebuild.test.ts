@@ -3,10 +3,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { main, startBuild, stopBuild, waitForBuild } from "../../scripts/performance/codebuild.ts";
+import { main, MAX_CONSECUTIVE_POLL_FAILURES, startBuild, stopBuild, waitForBuild } from "../../scripts/performance/codebuild.ts";
 import type { WaitHooks } from "../../scripts/performance/codebuild.ts";
 import type { Dict } from "../../scripts/performance/common.ts";
-import { clientError, FakeBuildLogs, FakeCodeBuild, makeClients } from "./fakes.ts";
+import { clientError, FakeBuildLogs, FakeCodeBuild, FakeServiceError, makeClients, networkError, transientError } from "./fakes.ts";
 import { tempDirectory } from "./helpers.ts";
 
 const ENV: Record<string, string> = {
@@ -117,6 +117,104 @@ describe("codebuild", () => {
     );
     assert.equal(summary.wait_timed_out, true);
     assert.deepEqual(fake.stopped, ["perf-runner:1"]);
+  });
+
+  describe("polling failures", () => {
+    const wait = (fake: FakeCodeBuild, waitHooks: WaitHooks, timeout = 600) =>
+      waitForBuild(makeClients({ codebuild: fake, logs: new FakeBuildLogs() }), "perf-runner:1", timeout, 5, waitHooks);
+
+    it("recovers after a transient error and waits one poll interval", async () => {
+      const fake = new FakeCodeBuild(["SUCCEEDED"]);
+      fake.failures = [transientError()];
+      const { hooks: waitHooks, sleeps } = hooks();
+      const summary = await wait(fake, waitHooks);
+      assert.equal(summary.status, "SUCCEEDED");
+      assert.deepEqual(sleeps, [5]);
+    });
+
+    it("tolerates the allowed number of consecutive failures", async () => {
+      const fake = new FakeCodeBuild(["SUCCEEDED"]);
+      fake.failures = Array.from({ length: MAX_CONSECUTIVE_POLL_FAILURES }, () => transientError());
+      assert.equal((await wait(fake, hooks().hooks)).status, "SUCCEEDED");
+    });
+
+    it("fails when the consecutive failures exceed the limit", async () => {
+      const fake = new FakeCodeBuild(["SUCCEEDED"]);
+      fake.failures = Array.from({ length: MAX_CONSECUTIVE_POLL_FAILURES + 1 }, (_, index) => transientError(`failure ${index + 1}`));
+      await assert.rejects(wait(fake, hooks().hooks), /failure 6/);
+      assert.equal(fake.polls, 0);
+    });
+
+    it("resets the counter after a successful poll", async () => {
+      const fake = new FakeCodeBuild(["IN_PROGRESS", "IN_PROGRESS", "SUCCEEDED"]);
+      const burst = () => Array.from({ length: MAX_CONSECUTIVE_POLL_FAILURES }, () => transientError());
+      fake.failures = [...burst(), null, ...burst(), null, ...burst()];
+      assert.equal((await wait(fake, hooks().hooks)).status, "SUCCEEDED");
+      assert.equal(fake.failures.length, 0);
+    });
+
+    const retryable: [string, () => Error][] = [
+      ["throttling", () => clientError("ThrottlingException", "Rate exceeded")],
+      ["a 5xx response", () => new FakeServiceError("InternalFailure", "oops", { status: 500 })],
+      ["a 429 response", () => new FakeServiceError("SomethingElse", "slow down", { status: 429 })],
+      ["an error the SDK marks as retryable", () => new FakeServiceError("Odd", "odd", { retryable: true })],
+      ["a connection reset", () => networkError("ECONNRESET")],
+      ["a timeout", () => networkError("ETIMEDOUT")],
+      ["a timeout error name", () => Object.assign(new Error("timed out"), { name: "TimeoutError" })],
+      ["a network error in the cause", () => new Error("fetch failed", { cause: networkError("ECONNRESET") })],
+    ];
+    for (const [label, make] of retryable) {
+      it(`retries ${label}`, async () => {
+        const fake = new FakeCodeBuild(["SUCCEEDED"]);
+        fake.failures = [make()];
+        assert.equal((await wait(fake, hooks().hooks)).status, "SUCCEEDED");
+      });
+    }
+
+    const permanent: [string, () => Error][] = [
+      ["AccessDeniedException", () => clientError("AccessDeniedException", "not allowed")],
+      ["AccessDenied with a 5xx status", () => new FakeServiceError("AccessDenied", "denied", { status: 500 })],
+      ["ValidationException", () => clientError("ValidationException", "bad id")],
+      ["InvalidInputException", () => clientError("InvalidInputException", "bad input")],
+      ["ResourceNotFoundException", () => clientError("ResourceNotFoundException", "gone")],
+      ["an unrecognized error", () => new Error("something odd")],
+    ];
+    for (const [label, make] of permanent) {
+      it(`fails at once on ${label}`, async () => {
+        const fake = new FakeCodeBuild(["SUCCEEDED"]);
+        const error = make();
+        fake.failures = [error, null];
+        const { hooks: waitHooks, sleeps } = hooks();
+        await assert.rejects(wait(fake, waitHooks), (thrown) => thrown === error);
+        assert.deepEqual(sleeps, []);
+        assert.equal(fake.failures.length, 1, "no second poll");
+      });
+    }
+
+    it("fails at once when the build does not exist", async () => {
+      const fake = new FakeCodeBuild(["SUCCEEDED"]);
+      fake.send = async () => ({ builds: [] });
+      const { hooks: waitHooks, sleeps } = hooks();
+      await assert.rejects(wait(fake, waitHooks), /not found/);
+      assert.deepEqual(sleeps, []);
+    });
+
+    it("keeps the overall deadline while retrying", async () => {
+      const fake = new FakeCodeBuild(["IN_PROGRESS"]);
+      fake.failures = [null, transientError(), null];
+      const clock = [0, 10, 20, 30, 40, 50][Symbol.iterator]();
+      const summary = await wait(fake, hooks({ monotonic: () => clock.next().value as number }).hooks, 15);
+      assert.equal(summary.wait_timed_out, true);
+      assert.equal(summary.status, "IN_PROGRESS");
+      assert.deepEqual(fake.stopped, ["perf-runner:1"]);
+    });
+
+    it("throws the polling error when the deadline passes before any build was seen", async () => {
+      const fake = new FakeCodeBuild(["IN_PROGRESS"]);
+      fake.failures = [transientError("first"), null];
+      const clock = [0, 100][Symbol.iterator]();
+      await assert.rejects(wait(fake, hooks({ monotonic: () => clock.next().value as number }).hooks, 15), /first/);
+    });
   });
 
   it("does not stop a finished build", async () => {

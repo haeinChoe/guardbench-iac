@@ -227,6 +227,57 @@ export function compare(name: string, expected: unknown, actual: unknown): Check
   return check(name, FAIL, expected, actual, `expected ${repr(expected)}, found ${repr(actual)}`);
 }
 
+const PERMANENT_ERROR_NAME =
+  /^(AccessDenied|UnauthorizedOperation|UnrecognizedClient|InvalidClientTokenId|ExpiredToken|SignatureDoesNotMatch|ValidationException|InvalidInputException|ResourceNotFoundException)/;
+const TRANSIENT_ERROR_NAME =
+  /^(Throttl|TooManyRequests|RequestLimitExceeded|RequestThrottled|SlowDown|BandwidthLimitExceeded|ServiceUnavailable|InternalFailure|InternalServerError|InternalError|TimeoutError|RequestTimeout)/;
+const NETWORK_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+/**
+ * Whether a failed AWS call is worth repeating: throttling, a 5xx or 429 response, a network or
+ * timeout failure, or an error the SDK itself marks as retryable. Access, validation and
+ * not-found errors, and anything unrecognized, are permanent.
+ */
+export function isTransientError(exc: unknown): boolean {
+  if (!(exc instanceof Error)) {
+    return false;
+  }
+  if (PERMANENT_ERROR_NAME.test(exc.name)) {
+    return false;
+  }
+  const detail = exc as Error & { $retryable?: unknown; $metadata?: { httpStatusCode?: number } };
+  if (detail.$retryable) {
+    return true;
+  }
+  if (TRANSIENT_ERROR_NAME.test(exc.name)) {
+    return true;
+  }
+  const status = detail.$metadata?.httpStatusCode;
+  if (status !== undefined && (status === 429 || status >= 500)) {
+    return true;
+  }
+  for (let current: unknown = exc, depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    const code = (current as Error & { code?: unknown }).code;
+    if (typeof code === "string" && NETWORK_ERROR_CODES.has(code)) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 /** "Name: message" of a thrown value. */
 export function describeError(exc: unknown): string {
   if (exc instanceof Error) {

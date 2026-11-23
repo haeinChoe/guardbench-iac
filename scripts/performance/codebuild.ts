@@ -14,6 +14,7 @@ import {
   describeError,
   iso,
   isObject,
+  isTransientError,
   log,
   monotonic,
   numberOption,
@@ -28,6 +29,8 @@ import {
 } from "./common.ts";
 import type { Clients } from "./common.ts";
 
+/** Consecutive failed BatchGetBuilds polls tolerated before the wait gives up. */
+export const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 const TERMINAL_STATUSES = new Set(["SUCCEEDED", "FAILED", "FAULT", "TIMED_OUT", "STOPPED"]);
 export const REQUIRED_ENV = [
   "BACKEND_COMMIT",
@@ -54,6 +57,14 @@ export interface BuildSummary {
   phases: { phase: string | undefined; status: string | undefined }[];
   logs: { group_name: string | undefined; stream_name: string | undefined };
   wait_timed_out: boolean;
+}
+
+class BuildNotFoundError extends Error {
+  override name = "BuildNotFoundError";
+
+  constructor(buildId: string) {
+    super(`build ${buildId} not found`);
+  }
 }
 
 /** Time and output hooks, replaceable in tests. */
@@ -153,13 +164,34 @@ export async function waitForBuild(
   const deadline = hooks.monotonic() + timeoutSeconds;
   const follower = new LogFollower(clients.logs, hooks.print);
   let lastPhase: string | undefined;
+  let lastBuild: Build | undefined;
+  let failures = 0;
   for (;;) {
-    const response = await clients.codebuild.send(new BatchGetBuildsCommand({ ids: [buildId] }));
-    const builds = response.builds ?? [];
-    if (builds.length === 0) {
-      throw new Error(`build ${buildId} not found`);
+    let build: Build;
+    try {
+      const response = await clients.codebuild.send(new BatchGetBuildsCommand({ ids: [buildId] }));
+      const builds = response.builds ?? [];
+      if (builds.length === 0) {
+        throw new BuildNotFoundError(buildId);
+      }
+      build = builds[0];
+    } catch (exc) {
+      if (exc instanceof BuildNotFoundError || !isTransientError(exc)) {
+        throw exc;
+      }
+      failures += 1;
+      if (failures > MAX_CONSECUTIVE_POLL_FAILURES) {
+        throw exc;
+      }
+      log(`build ${buildId}: poll failed (${failures}/${MAX_CONSECUTIVE_POLL_FAILURES}), retrying: ${describeError(exc)}`);
+      if (hooks.monotonic() >= deadline) {
+        return await timedOut(clients.codebuild, buildId, lastBuild, exc);
+      }
+      await hooks.sleep(pollSeconds);
+      continue;
     }
-    const build = builds[0];
+    failures = 0;
+    lastBuild = build;
     if (build.currentPhase !== lastPhase) {
       log(`build ${buildId}: phase ${build.currentPhase}`);
       lastPhase = build.currentPhase;
@@ -174,6 +206,24 @@ export async function waitForBuild(
     }
     await hooks.sleep(pollSeconds);
   }
+}
+
+/** The deadline passed while polling kept failing: stop the build if possible and report the timeout. */
+async function timedOut(
+  codebuild: CodeBuildClient,
+  buildId: string,
+  lastBuild: Build | undefined,
+  cause: unknown,
+): Promise<BuildSummary> {
+  try {
+    await stopBuild(codebuild, buildId);
+  } catch (exc) {
+    log(`build ${buildId}: could not stop the build: ${describeError(exc)}`);
+  }
+  if (lastBuild === undefined) {
+    throw cause;
+  }
+  return summarize(lastBuild, true);
 }
 
 /** Stop the build if it is still running; return the status seen afterwards. */

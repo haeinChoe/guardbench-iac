@@ -11,17 +11,33 @@ export const REGION = "ap-northeast-2";
 
 /** Shaped like an SDK service exception (it carries `$metadata`). */
 export class FakeServiceError extends Error {
-  readonly $fault = "client";
-  readonly $metadata = {};
+  readonly $fault: string;
+  readonly $metadata: { httpStatusCode?: number };
+  readonly $retryable?: { throttling?: boolean };
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, extra: { status?: number; retryable?: boolean } = {}) {
     super(message);
     this.name = code;
+    this.$fault = (extra.status ?? 400) >= 500 ? "server" : "client";
+    this.$metadata = extra.status === undefined ? {} : { httpStatusCode: extra.status };
+    if (extra.retryable) {
+      this.$retryable = {};
+    }
   }
 }
 
 export function clientError(code: string, message: string): FakeServiceError {
   return new FakeServiceError(code, message);
+}
+
+/** A failure that is worth repeating: a 5xx response. */
+export function transientError(message = "service unavailable"): FakeServiceError {
+  return new FakeServiceError("ServiceUnavailable", message, { status: 503 });
+}
+
+/** A socket-level failure, without any service response. */
+export function networkError(code = "ECONNRESET"): Error {
+  return Object.assign(new Error(`read ${code}`), { code });
 }
 
 interface SdkCommand {
@@ -326,6 +342,8 @@ export class FakeLogs {
 export class FakeCodeBuild {
   statuses: string[];
   polls = 0;
+  /** One entry per BatchGetBuilds call, in order: an error to throw, or null to answer normally. */
+  failures: (Error | null)[] = [];
   started: { project: string; env: Dict[] }[] = [];
   stopped: string[] = [];
 
@@ -340,6 +358,10 @@ export class FakeCodeBuild {
         this.started.push({ project: input.projectName, env: input.environmentVariablesOverride });
         return { build: { id: `${input.projectName}:1`, buildStatus: "IN_PROGRESS" } };
       case "BatchGetBuildsCommand": {
+        const failure = this.failures.shift();
+        if (failure) {
+          throw failure;
+        }
         const index = Math.min(this.polls, this.statuses.length - 1);
         this.polls += 1;
         const status = this.statuses[index];
