@@ -4,6 +4,25 @@ name: Performance Experiment
 # run the Runner in CodeBuild, collect evidence, combine the verdict, then destroy.
 # Run it from the dev branch only. Configure the `performance-experiment` environment with
 # required reviewers: an approved run is the approval to apply.
+#
+# Time contract, in minutes:
+#   job timeout                                        600
+#     wait for the Runner build                        485  (--timeout-seconds 29100)
+#     everything else                                  115
+#       setup, snapshot, preflight, build start          8  (checkout, Node, npm ci, Terraform, credentials, init)
+#       terraform apply                                 45  (step timeout)
+#       queue drain                                      5  (at most)
+#       metrics settle                                   3
+#       download, combine, record, upload                4
+#       terraform destroy                               40  (step timeout; both attempts included)
+#       verify the experiment layer is gone              5  (step timeout)
+#       margin                                           5
+# The CodeBuild project timeout is at most 480 minutes, below the 485-minute wait, so a build
+# ends (or times out in CodeBuild) before the wait gives up.
+# The first credentials last 36000 seconds from the configure step, which runs a few minutes
+# after the job starts, so they end a few minutes after the job timeout. A cleanup that runs
+# after the job timeout cancels the run needs more time than that, so the cleanup steps use the
+# fresh session from the "Refresh AWS credentials for cleanup" step.
 
 on:
   workflow_dispatch:
@@ -33,7 +52,8 @@ permissions:
   contents: read
   id-token: write
 
-# One experiment at a time; a queued run waits instead of cancelling the running one.
+# One experiment at a time; a new run waits for the running one instead of cancelling it. Only
+# one run can wait per group: a newer waiting run cancels the older waiting run.
 concurrency:
   group: performance-experiment
   cancel-in-progress: false
@@ -142,6 +162,7 @@ jobs:
 
       - name: Terraform apply
         id: apply
+        timeout-minutes: 45
         run: |
           read -r -a apply_args <<< "$TF_FLAGS"
           terraform -chdir="$TF_DIR" apply -input=false -auto-approve -no-color "${apply_args[@]}"
@@ -270,6 +291,7 @@ jobs:
       - name: Terraform destroy
         id: destroy
         if: always() && steps.apply_marker.outputs.attempted == 'true'
+        timeout-minutes: 40
         run: |
           read -r -a apply_args <<< "$TF_FLAGS"
           for attempt in 1 2; do
@@ -283,6 +305,7 @@ jobs:
       - name: Verify the experiment layer is gone
         id: verify_destroy
         if: always() && steps.apply_marker.outputs.attempted == 'true'
+        timeout-minutes: 5
         run: |
           if ! terraform -chdir="$TF_DIR" state list > "$EXP_DIR/state-after-destroy.txt"; then
             echo "state list could not be read" > "$EXP_DIR/state-after-destroy.txt"
@@ -301,6 +324,8 @@ jobs:
           name: performance-experiment-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/performance-experiment
           if-no-files-found: ignore
+          # The originals are in the results bucket, which keeps them for 30 days.
+          retention-days: 7
 
       # Last on purpose: the job fails here, after destroy and evidence preservation, unless
       # every stage passed and the final verdict is PASS. The decision lives in gate.ts.
