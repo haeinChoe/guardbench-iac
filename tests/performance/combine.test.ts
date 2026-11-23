@@ -47,12 +47,12 @@ describe("combine", () => {
   };
 
   const run = (
-    options: { build?: Dict; infrastructure?: Dict | null; preflight?: Dict | null; withResults?: boolean } = {},
+    options: { build?: Dict | null; infrastructure?: Dict | null; preflight?: Dict | null; withResults?: boolean } = {},
   ): Dict =>
     combine(
       snapshot,
       options.withResults === false ? null : ctx.results,
-      options.build ?? { status: "SUCCEEDED", build_id: "perf-runner:1" },
+      options.build === undefined ? { status: "SUCCEEDED", build_id: "perf-runner:1" } : options.build,
       options.infrastructure === undefined ? infra() : options.infrastructure,
       options.preflight ?? null,
     );
@@ -167,6 +167,68 @@ describe("combine", () => {
     assert.ok(final.reasons.some((reason: string) => reason.includes("rds.instance_class")));
   });
 
+  describe("build status checks", () => {
+    const passingRunner = (exitCode: number) => {
+      write("runner-exit-code", String(exitCode));
+      write("result.json", runnerResult(exitCode === 0 ? "PASS" : "FAIL"));
+    };
+
+    for (const status of ["FAILED", "FAULT", "TIMED_OUT", "STOPPED", "IN_PROGRESS"]) {
+      it(`is an error for Runner exit 0 with build status ${status}`, () => {
+        passingRunner(0);
+        const final = run({ build: { status, build_id: "perf-runner:1" } });
+        assert.equal(final.status, ERROR);
+        assert.equal(final.runner.status, ERROR);
+        assert.equal(final.runner.exit_code, 2);
+        assert.ok(final.reasons.some((reason: string) => reason.includes(`build status is ${status}`)), JSON.stringify(final.reasons));
+      });
+    }
+
+    it("is an error for Runner exit 0 when the build wait timed out", () => {
+      passingRunner(0);
+      const final = run({ build: { status: "SUCCEEDED", build_id: "perf-runner:1", wait_timed_out: true } });
+      assert.equal(final.status, ERROR);
+      assert.equal(final.runner.exit_code, 2);
+      assert.ok(final.reasons.some((reason: string) => reason.includes("timed out")));
+    });
+
+    it("is an error for Runner exit 0 when there is no build summary", () => {
+      passingRunner(0);
+      const final = run({ build: null });
+      assert.equal(final.status, ERROR);
+      assert.equal(final.build.status, NOT_RUN);
+      assert.ok(final.reasons.some((reason: string) => reason.includes("no build summary")));
+    });
+
+    it("keeps the Runner result for the evidence when the build check fails", () => {
+      passingRunner(0);
+      const final = run({ build: { status: "FAILED" } });
+      assert.equal(final.runner.result.acceptance_status, "PASS");
+      assert.deepEqual(final.tuple, { W: 4, C: 5, T: 20 });
+    });
+
+    it("accepts a FAILED build for a measurement FAIL", () => {
+      passingRunner(1);
+      const final = run({ build: { status: "FAILED", build_id: "perf-runner:1" } });
+      assert.equal(final.status, FAIL);
+      assert.equal(final.runner.status, FAIL);
+      assert.equal(final.runner.exit_code, 1);
+      assert.ok(!final.reasons.some((reason: string) => reason.includes("build status")));
+    });
+
+    it("does not need a build summary for a measurement FAIL", () => {
+      passingRunner(1);
+      assert.equal(run({ build: null }).status, FAIL);
+    });
+
+    it("adds no build reason when the Runner already reports an error", () => {
+      write("runner-exit-code", "2");
+      const final = run({ build: { status: "FAILED" } });
+      assert.equal(final.status, ERROR);
+      assert.ok(!final.reasons.some((reason: string) => reason.includes("build status")));
+    });
+  });
+
   it("is an error for a build that timed out without results", () => {
     const final = run({ build: { status: "TIMED_OUT", build_id: "perf-runner:1" }, withResults: false });
     assert.equal(final.status, ERROR);
@@ -175,7 +237,7 @@ describe("combine", () => {
 });
 
 describe("combine CLI", () => {
-  function runCli(t: unknown, exitCode: number | null, resultStatus?: string) {
+  function runCli(t: unknown, exitCode: number | null, resultStatus?: string, buildStatus: string | null = "SUCCEEDED") {
     const root = tempDirectory(t as never);
     mkdirSync(join(root, "results"));
     writeFileSync(join(root, "snapshot.json"), JSON.stringify(makeSnapshot()), "utf-8");
@@ -186,9 +248,15 @@ describe("combine CLI", () => {
     if (resultStatus) {
       writeFileSync(join(root, "results", "result.json"), JSON.stringify(runnerResult(resultStatus)), "utf-8");
     }
+    const buildArgs: string[] = [];
+    if (buildStatus !== null) {
+      writeFileSync(join(root, "build.json"), JSON.stringify({ status: buildStatus, build_id: "perf-runner:1" }), "utf-8");
+      buildArgs.push("--build", join(root, "build.json"));
+    }
     return main([
       "--snapshot", join(root, "snapshot.json"),
       "--result-dir", join(root, "results"),
+      ...buildArgs,
       "--infrastructure", join(root, "infra.json"),
       "--output", join(root, "final.json"),
       "--summary", join(root, "summary.md"),
@@ -201,13 +269,18 @@ describe("combine CLI", () => {
 
   it("follows the verdict in its exit codes", async (t) => {
     assert.equal((await runCli(t, 0, "PASS")).code, 0);
-    assert.equal((await runCli(t, 1, "FAIL")).code, 1);
+    assert.equal((await runCli(t, 1, "FAIL", "FAILED")).code, 1);
     assert.equal((await runCli(t, 2)).code, 2);
     assert.equal((await runCli(t, null)).code, 2);
   });
 
+  it("is an error for a passing Runner without a usable build summary", async (t) => {
+    assert.equal((await runCli(t, 0, "PASS", null)).code, 2);
+    assert.equal((await runCli(t, 0, "PASS", "FAILED")).code, 2);
+  });
+
   it("names the verdict and the tuple in the summary", async (t) => {
-    const { final, summary } = await runCli(t, 1, "FAIL");
+    const { final, summary } = await runCli(t, 1, "FAIL", "FAILED");
     assert.equal(final.status, FAIL);
     assert.ok(summary.includes("(4, 5, 20)"));
     assert.ok(summary.includes("**FAIL**"));

@@ -84,6 +84,20 @@ function resultSummary(result: Dict): Dict {
   };
 }
 
+/** Why the build summary cannot back a passing Runner, or null when it can. */
+function buildProblem(build: Dict | null): string | null {
+  if (build === null) {
+    return "the CodeBuild build status could not be confirmed (no build summary)";
+  }
+  if (build.wait_timed_out === true) {
+    return "the wait for the CodeBuild build timed out";
+  }
+  if (build.status !== "SUCCEEDED") {
+    return `the CodeBuild build status is ${build.status ?? "unknown"}, not SUCCEEDED`;
+  }
+  return null;
+}
+
 export function combine(
   snapshot: Dict,
   resultDir: string | null,
@@ -139,6 +153,16 @@ export function combine(
       result = parsed;
     } else {
       reasons.push(`Runner exit code ${exitCode} but ${RESULT_FILE} is ${problem ?? "not an object"}; treated as 2`);
+      exitCode = 2;
+      runner.exit_code = 2;
+    }
+  }
+  if (exitCode === 0) {
+    // A passing Runner means its build ended with SUCCEEDED. Exit code 1 (a measurement FAIL)
+    // makes the build FAILED, which is expected, so it is not checked.
+    const problem = buildProblem(build);
+    if (problem !== null) {
+      reasons.push(`Runner exit code 0 but ${problem}; treated as 2`);
       exitCode = 2;
       runner.exit_code = 2;
     }
