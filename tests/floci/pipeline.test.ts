@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
-import { Environment, PRESET } from "./harness.ts";
+import { Environment, EXPERIMENT_POLICIES, MANAGED_POLICY_LIMIT, PRESET } from "./harness.ts";
 import type { PipelineResult } from "./harness.ts";
 
 const skip = process.env.FLOCI_PIPELINE === "1" ? false : "set FLOCI_PIPELINE=1 to run the Floci pipeline test (needs Docker)";
@@ -67,6 +67,15 @@ describe("Floci pipeline", { skip }, () => {
     }
   }
 
+  it("0: the experiment policies fit the managed policy size limit", () => {
+    const sizes = environment.policySizes();
+    console.log(`managed policy sizes without whitespace: ${JSON.stringify(sizes)}`);
+    assert.deepEqual(Object.keys(sizes).sort(), [...EXPERIMENT_POLICIES].sort());
+    for (const [name, size] of Object.entries(sizes)) {
+      assert.ok(size <= MANAGED_POLICY_LIMIT, `${name} is ${size} characters, over ${MANAGED_POLICY_LIMIT}`);
+    }
+  });
+
   it("1: Runner PASS", { timeout: TIMEOUT }, async () => {
     const result = await runScenario("pass", "pass");
     assert.equal(result.steps.preflight, 0, JSON.stringify(result.preflight));
@@ -77,6 +86,7 @@ describe("Floci pipeline", { skip }, () => {
     assert.deepEqual(result.final?.tuple, { W: 1, C: 2, T: 2 });
     assert.equal(result.final?.infrastructure.status, "PASS");
     assert.equal(result.steps.combine, 0);
+    assert.equal(result.steps.gate, 0, "the run passes only when the verdict is PASS and destroy was verified");
     assertHas(await recordedKeys(result), ["final.json", "summary.md", "snapshot.json"]);
     await assertDestroyed(result);
   });
@@ -90,6 +100,7 @@ describe("Floci pipeline", { skip }, () => {
     assert.equal(result.final?.runner.status, "FAIL");
     assert.deepEqual(result.final?.tuple, { W: 1, C: 2, T: 2 });
     assert.equal(result.steps.combine, 1);
+    assert.equal(result.steps.gate, 1, "a measurement FAIL fails the run");
     assertHas(await recordedKeys(result), ["final.json", "summary.md"]);
     await assertDestroyed(result);
   });
@@ -103,6 +114,7 @@ describe("Floci pipeline", { skip }, () => {
     assert.equal(result.final?.status, "ERROR", JSON.stringify(result.final));
     assert.equal(result.final?.runner.failure.phase, "report");
     assert.equal(result.steps.combine, 2);
+    assert.equal(result.steps.gate, 1, "a Runner error fails the run");
     assertHas(await recordedKeys(result), ["final.json", "summary.md"]);
     await assertDestroyed(result);
   });
@@ -117,10 +129,12 @@ describe("Floci pipeline", { skip }, () => {
       .map((item) => item.name);
     assert.deepEqual(failed, ["sqs.source.gb-workitems"]);
     assert.ok(!("start_build" in result.steps));
+    assert.ok(!("collect" in result.steps), "no evidence is collected without a build");
     assert.equal(await environment.runnerBuildCount(), buildsBefore, "no Runner build may start");
     assert.equal(result.final?.status, "ERROR");
     assert.equal(result.final?.stage, "preflight");
     assert.equal(result.final?.runner.status, "NOT_RUN");
+    assert.equal(result.steps.gate, 1, "a failed preflight fails the run");
     assertHas(await recordedKeys(result), ["final.json", "preflight.json"]);
     await assertDestroyed(result);
   });

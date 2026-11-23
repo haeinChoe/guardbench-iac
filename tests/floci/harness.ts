@@ -1,9 +1,22 @@
-// Floci-backed harness that runs the experiment entrypoint's steps against a local emulator.
+// Floci-backed harness that runs the experiment workflow's steps against a local emulator.
 //
-// Nothing here reaches a real AWS endpoint: every process gets dummy credentials, an empty AWS
-// config, and a loopback endpoint. Terraform reaches Floci only through generated override files
-// written into a throwaway copy of the roots; the roots themselves have no emulator branch. The
-// scripts under scripts/performance run unchanged and find Floci through AWS_ENDPOINT_URL.
+// Network reach: every process gets dummy credentials, an empty AWS config and a loopback
+// endpoint. The Node scripts reach Floci through AWS_ENDPOINT_URL, which the AWS SDK for
+// JavaScript applies to every service. Terraform reaches Floci through generated override files
+// written into a throwaway copy of the roots, which name the S3 backend and the provider
+// endpoints of the services the roots use (PROVIDER_ENDPOINT_SERVICES), and through
+// AWS_ENDPOINT_URL, which the AWS provider applies to every service the override does not list
+// (documented for provider 5.100.0, the version `terraform init` installs for `~> 5.0`). The
+// roots themselves have no emulator branch. Were a provider that ignores AWS_ENDPOINT_URL
+// installed, a service outside the list would go to the real AWS endpoint, be rejected for its
+// dummy credentials and fail the test; it would not change anything in AWS.
+//
+// Cleanup is limited to this run: Floci starts with its own resource namespace, so every
+// container it creates carries a `floci_namespace` label, and only containers with that label
+// are removed.
+//
+// The steps and their conditions come from the workflow file itself (see workflow.ts), so a
+// condition changed there changes the order and the skips here.
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -46,9 +59,11 @@ import {
 import { PurgeQueueCommand, SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 
 import type { Dict } from "../../scripts/performance/common.ts";
+import { loadWorkflow, NOT_SIMULATED_STEPS, runWorkflow, throwIfFailed } from "../performance/workflow.ts";
+import type { Action, ActionResult, RunState, Workflow } from "../performance/workflow.ts";
 
 export const REPO_ROOT = resolve(import.meta.dirname, "../..");
-const FLOCI_IMAGE = "floci/floci:2.4.0";
+const FLOCI_IMAGE = "floci/floci:2.4.0@sha256:5ee85db604c4aa74ac76e07ea5cc83086f37bb472bf3dbb97e34019e48efae9c";
 export const REGION = "ap-northeast-2";
 const STATE_BUCKET = "guardbench-terraform-state";
 const ROOTS = ["shared", "performance-base", "performance-experiment"] as const;
@@ -140,6 +155,8 @@ function sleepSeconds(seconds: number): Promise<void> {
 /** One Floci container; AWS clients and Terraform are pointed at it by environment/override. */
 export class Floci {
   readonly name = `floci-iac-test-${randomBytes(4).toString("hex")}`;
+  /** Floci's resource namespace: the `floci_namespace` label of everything this instance creates. */
+  readonly namespace = `iac-${randomBytes(4).toString("hex")}`;
   port = 0;
   endpoint = "";
 
@@ -156,6 +173,7 @@ export class Floci {
       "docker", "run", "--detach", "--name", this.name,
       "--publish", `127.0.0.1:${this.port}:4566`,
       "--volume", "/var/run/docker.sock:/var/run/docker.sock",
+      "--env", `FLOCI_DOCKER_RESOURCE_NAMESPACE=${this.namespace}`,
       FLOCI_IMAGE,
     ]);
     const deadline = Date.now() + 90_000;
@@ -173,11 +191,31 @@ export class Floci {
     throw new Error("Floci did not become ready");
   }
 
-  /** Remove Floci and every container it created (they carry the label floci=true). */
+  /** Containers created by this instance: the ones carrying its namespace label. */
+  childContainers(): { id: string; name: string }[] {
+    const listing = run(
+      ["docker", "ps", "--all", "--no-trunc", "--filter", `label=floci_namespace=${this.namespace}`, "--format", "{{.ID}} {{.Names}}"],
+      { check: false },
+    ).stdout;
+    return listing
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [id, name] = line.split(" ");
+        return { id, name };
+      });
+  }
+
+  /** Remove Floci and the containers and volumes of its namespace; nothing else is touched. */
   stop(): void {
-    const listing = run(["docker", "ps", "--all", "--quiet", "--filter", "label=floci=true"], { check: false }).stdout.split(/\s+/);
-    for (const containerId of listing.filter(Boolean)) {
-      run(["docker", "rm", "--force", containerId], { check: false });
+    for (const { id } of this.childContainers()) {
+      run(["docker", "rm", "--force", id], { check: false });
+    }
+    const volumes = run(["docker", "volume", "ls", "--quiet", "--filter", `label=floci_namespace=${this.namespace}`], {
+      check: false,
+    }).stdout.split(/\s+/);
+    for (const volume of volumes.filter(Boolean)) {
+      run(["docker", "volume", "rm", "--force", volume], { check: false });
     }
     run(["docker", "rm", "--force", this.name], { check: false });
   }
@@ -270,6 +308,15 @@ data "terraform_remote_state" "${name.replaceAll("-", "_")}" {
   return text;
 }
 
+/** The managed policies of the experiment role and its permissions boundary (performance-base). */
+export const EXPERIMENT_POLICIES = [
+  "performance_experiment_state_and_lifecycle",
+  "performance_experiment_logs_network_and_run",
+  "performance_experiment_boundary",
+];
+/** Maximum characters of a managed policy, whitespace excluded. */
+export const MANAGED_POLICY_LIMIT = 6144;
+
 const COPY_EXCLUDED = new Set([".terraform", ".terraform.lock.hcl", "override.tf"]);
 
 function copyTree(source: string, destination: string): void {
@@ -303,7 +350,7 @@ export class Workspace {
     for (const name of ROOTS) {
       writeFileSync(join(root, "terraform", name, "override.tf"), override(name, floci), "utf-8");
     }
-    const tfEnv = { ...floci.baseEnv(), TF_IN_AUTOMATION: "true" } as Record<string, string>;
+    const tfEnv = { ...floci.baseEnv(), TF_IN_AUTOMATION: "true", AWS_ENDPOINT_URL: floci.endpoint } as Record<string, string>;
     if (process.env.TF_PLUGIN_CACHE_DIR) {
       tfEnv.TF_PLUGIN_CACHE_DIR = process.env.TF_PLUGIN_CACHE_DIR;
     }
@@ -396,7 +443,10 @@ export class Images {
 export interface PipelineResult {
   name: string;
   expDir: string;
+  /** Exit codes of the steps that ran, by step id (a skipped step has no entry). */
   steps: Record<string, number>;
+  /** What each workflow step did: ran or skipped, and its outcome. */
+  report: { name: string; ran: boolean; outcome: string; conclusion: string }[];
   final: Dict | null;
   preflight: Dict | null;
   destroyVerification: Dict | null;
@@ -409,12 +459,13 @@ function readJsonFile(path: string): Dict {
   return JSON.parse(readFileSync(path, "utf-8"));
 }
 
-/** The entrypoint workflow's steps, in the workflow's order, against Floci. */
+/** The entrypoint workflow's steps, run in the workflow's order under the workflow's conditions. */
 export class Pipeline {
   private readonly floci: Floci;
   private readonly workspace: Workspace;
   private readonly images: Images;
   private readonly runDir: string;
+  private readonly workflow: Workflow = loadWorkflow();
 
   constructor(floci: Floci, workspace: Workspace, images: Images, runDir: string) {
     this.floci = floci;
@@ -455,14 +506,23 @@ export class Pipeline {
     }).status;
   }
 
+  /**
+   * Run one experiment through the workflow's steps. A step that throws is a failed step: the
+   * later steps still follow their conditions, so destroy and its verification run after a
+   * failed apply. Afterwards the first thrown error is raised, with later ones (a failing
+   * destroy, say) appended to it instead of replacing it, and all of them written to
+   * logs/errors.log.
+   */
   async execute(name: string, scenario: string, options: { seedQueueMessage?: boolean } = {}): Promise<PipelineResult> {
     const exp = join(this.runDir, name);
-    mkdirSync(exp, { recursive: true });
     const logs = join(exp, "logs");
+    // "Validate inputs and prepare the work directory"
+    mkdirSync(join(exp, "results"), { recursive: true });
     const result: PipelineResult = {
       name,
       expDir: exp,
       steps: {},
+      report: [],
       final: null,
       preflight: null,
       destroyVerification: null,
@@ -472,57 +532,181 @@ export class Pipeline {
     };
     const flags = this.terraformFlags();
     const extraEnv = this.terraformEnv();
-    let applyAttempted = false;
-    try {
-      this.workspace.terraform("performance-experiment", ["init", "-input=false", "-no-color"], {
-        log: join(logs, "init.log"),
-      });
-      applyAttempted = true;
-      this.workspace.terraform(
-        "performance-experiment",
-        ["apply", "-input=false", "-auto-approve", "-no-color", ...flags],
-        { extraEnv, log: join(logs, "apply.log") },
-      );
-      const snapshotText = this.workspace.terraform(
-        "performance-experiment",
-        ["output", "-json", "infrastructure_snapshot"],
-        { log: join(logs, "snapshot.log") },
-      ).stdout;
-      writeFileSync(join(exp, "snapshot.json"), snapshotText, "utf-8");
-      const snapshot = JSON.parse(snapshotText) as Dict;
-      result.snapshot = snapshot;
-      const runner = snapshot.resources.runner;
-      const resultPrefix = `s3://${runner.results_bucket_name}/performance/results/${PRESET}/${name}/`;
+    const path = (file: string) => join(exp, file);
+    const step = (id: string, status: number): ActionResult => {
+      result.steps[id] = status;
+      return { ok: status === 0 };
+    };
+    let resultPrefix = "";
 
-      if (options.seedQueueMessage) {
-        const queue = snapshot.resources.sqs.source_queue_urls["gb-workitems"];
-        await this.floci
-          .client(SQSClient)
-          .send(new SendMessageCommand({ QueueUrl: queue, MessageBody: "left over from an earlier run" }));
-      }
+    const actions: Record<string, Action> = {
+      "Terraform init": async () => {
+        this.workspace.terraform("performance-experiment", ["init", "-input=false", "-no-color"], { log: join(logs, "init.log") });
+        return { ok: true };
+      },
+      "Mark apply attempted": async () => ({ ok: true, outputs: { attempted: "true" } }),
+      "Terraform apply": async () => {
+        this.workspace.terraform(
+          "performance-experiment",
+          ["apply", "-input=false", "-auto-approve", "-no-color", ...flags],
+          { extraEnv, log: join(logs, "apply.log") },
+        );
+        return { ok: true };
+      },
+      "Export the infrastructure snapshot": async () => {
+        const text = this.workspace.terraform("performance-experiment", ["output", "-json", "infrastructure_snapshot"], {
+          log: join(logs, "snapshot.log"),
+        }).stdout;
+        writeFileSync(path("snapshot.json"), text, "utf-8");
+        const snapshot = JSON.parse(text) as Dict;
+        result.snapshot = snapshot;
+        resultPrefix = `s3://${snapshot.resources.runner.results_bucket_name}/performance/results/${PRESET}/${name}/`;
+        return { ok: true, outputs: { result_prefix: resultPrefix, project: snapshot.resources.runner.codebuild_project_name } };
+      },
+      "Preflight check": async () => {
+        if (options.seedQueueMessage) {
+          // Test fixture: a message left in a source queue, which the preflight must refuse.
+          const queue = (result.snapshot as Dict).resources.sqs.source_queue_urls["gb-workitems"];
+          await this.floci
+            .client(SQSClient)
+            .send(new SendMessageCommand({ QueueUrl: queue, MessageBody: "left over from an earlier run" }));
+        }
+        const status = this.script(
+          "preflight",
+          ["--snapshot", path("snapshot.json"), "--output", path("preflight.json")],
+          join(logs, "preflight.log"),
+        );
+        result.preflight = readJsonFile(path("preflight.json"));
+        return step("preflight", status);
+      },
+      "Prepare the Runner build environment": async () => {
+        const snapshot = result.snapshot as Dict;
+        writeFileSync(path("build-env.json"), JSON.stringify(this.runnerEnv(snapshot, scenario, resultPrefix), null, 2), "utf-8");
+        return { ok: true, outputs: { runner_prefix: `${resultPrefix}runner/` } };
+      },
+      "Start the Runner build": async () =>
+        step(
+          "start_build",
+          this.script(
+            "codebuild",
+            [
+              "start",
+              "--project", (result.snapshot as Dict).resources.runner.codebuild_project_name,
+              "--env-file", path("build-env.json"),
+              "--output", path("build-start.json"),
+            ],
+            join(logs, "start-build.log"),
+          ),
+        ),
+      "Wait for the Runner build": async () => {
+        const status = this.script(
+          "codebuild",
+          ["wait", "--start-file", path("build-start.json"), "--output", path("build.json"), "--timeout-seconds", "900", "--poll-seconds", "2"],
+          join(logs, "wait-build.log"),
+        );
+        if (existsSync(path("build.json"))) {
+          result.build = readJsonFile(path("build.json"));
+        }
+        return step("wait_build", status);
+      },
+      "Stop the Runner build if it is still running": async () =>
+        step("stop_build", this.script("codebuild", ["stop", "--start-file", path("build-start.json")], join(logs, "stop-build.log"))),
+      "Download the Runner results": async () => {
+        const status = this.script(
+          "s3results",
+          ["download", "--prefix", `${resultPrefix}runner/`, "--dest", path("results")],
+          join(logs, "download.log"),
+        );
+        result.runnerFiles = readdirSync(path("results")).sort();
+        return step("download", status);
+      },
+      "Collect infrastructure evidence": async () =>
+        step(
+          "collect",
+          this.script(
+            "collect",
+            [
+              "--snapshot", path("snapshot.json"),
+              "--result-dir", path("results"),
+              "--build", path("build.json"),
+              "--output", path("infrastructure.json"),
+              "--logs-output", path("ecs-logs.json"),
+              "--drain-timeout-seconds", "30",
+              "--drain-poll-seconds", "2",
+              // Floci publishes no metrics, so there is nothing to wait for.
+              "--metrics-settle-seconds", "0",
+            ],
+            join(logs, "collect.log"),
+          ),
+        ),
+      "Combine the verdict": async () => {
+        const status = this.script(
+          "combine",
+          [
+            "--snapshot", path("snapshot.json"),
+            "--result-dir", path("results"),
+            "--build", path("build.json"),
+            "--infrastructure", path("infrastructure.json"),
+            "--preflight", path("preflight.json"),
+            "--output", path("final.json"),
+            "--summary", path("summary.md"),
+          ],
+          join(logs, "combine.log"),
+        );
+        result.final = readJsonFile(path("final.json"));
+        return step("combine", status);
+      },
+      "Preserve the experiment record in the results bucket": async () =>
+        step(
+          "record",
+          this.script("s3results", ["upload", "--src", this.record(exp), "--prefix", `${resultPrefix}experiment/`], join(logs, "upload.log")),
+        ),
+      "Terraform destroy": async () => {
+        const destroy = this.workspace.terraform(
+          "performance-experiment",
+          ["destroy", "-input=false", "-auto-approve", "-no-color", "-lock-timeout=5m", ...flags],
+          { extraEnv, log: join(logs, "destroy.log"), check: false },
+        );
+        return step("destroy", destroy.status);
+      },
+      "Verify the experiment layer is gone": async () => {
+        const state = this.workspace.terraform("performance-experiment", ["state", "list"], {
+          log: join(logs, "state.log"),
+          check: false,
+        });
+        writeFileSync(path("state-after-destroy.txt"), state.status === 0 ? state.stdout : "state list could not be read\n", "utf-8");
+        const args = ["--state-list", path("state-after-destroy.txt"), "--output", path("destroy-verification.json")];
+        if (existsSync(path("snapshot.json"))) {
+          args.push("--snapshot", path("snapshot.json"));
+        }
+        const status = this.script("verify_destroyed", args, join(logs, "verify-destroy.log"));
+        result.destroyVerification = readJsonFile(path("destroy-verification.json"));
+        return step("verify_destroy", status);
+      },
+      "Fail unless the experiment passed": async (state: RunState) =>
+        step(
+          "gate",
+          this.script(
+            "gate",
+            [
+              "--apply-outcome", state.outcome("apply") ?? "skipped",
+              "--destroy-outcome", state.outcome("destroy") ?? "skipped",
+              "--verify-outcome", state.outcome("verify_destroy") ?? "skipped",
+              "--final", path("final.json"),
+            ],
+            join(logs, "gate.log"),
+          ),
+        ),
+    };
 
-      result.steps.preflight = this.script(
-        "preflight",
-        ["--snapshot", join(exp, "snapshot.json"), "--output", join(exp, "preflight.json")],
-        join(logs, "preflight.log"),
-      );
-      result.preflight = readJsonFile(join(exp, "preflight.json"));
-
-      if (result.steps.preflight === 0) {
-        this.runRunner(exp, logs, snapshot, scenario, resultPrefix, result);
-      }
-
-      this.combine(exp, logs, result);
-      this.script(
-        "s3results",
-        ["upload", "--src", this.record(exp), "--prefix", `${resultPrefix}experiment/`],
-        join(logs, "upload.log"),
-      );
-    } finally {
-      if (applyAttempted) {
-        this.destroy(exp, logs, flags, extraEnv, result);
-      }
+    const report = await runWorkflow(this.workflow, actions, NOT_SIMULATED_STEPS);
+    result.report = report.steps.map(({ name: stepName, ran, outcome, conclusion }) => ({ name: stepName, ran, outcome, conclusion }));
+    if (report.errors.length > 0) {
+      mkdirSync(logs, { recursive: true });
+      const lines = report.errors.map((item) => `${item.step}: ${item.error instanceof Error ? (item.error.stack ?? item.error.message) : String(item.error)}`);
+      writeFileSync(join(logs, "errors.log"), `${lines.join("\n\n")}\n`, "utf-8");
     }
+    throwIfFailed(report);
     return result;
   }
 
@@ -541,72 +725,6 @@ export class Pipeline {
     return Object.fromEntries(Object.entries(env).filter(([, value]) => value));
   }
 
-  private runRunner(
-    exp: string,
-    logs: string,
-    snapshot: Dict,
-    scenario: string,
-    resultPrefix: string,
-    result: PipelineResult,
-  ): void {
-    writeFileSync(join(exp, "build-env.json"), JSON.stringify(this.runnerEnv(snapshot, scenario, resultPrefix), null, 2), "utf-8");
-    const project = snapshot.resources.runner.codebuild_project_name;
-    result.steps.start_build = this.script(
-      "codebuild",
-      ["start", "--project", project, "--env-file", join(exp, "build-env.json"), "--output", join(exp, "build-start.json")],
-      join(logs, "start-build.log"),
-    );
-    if (result.steps.start_build !== 0) {
-      return;
-    }
-    result.steps.wait_build = this.script(
-      "codebuild",
-      ["wait", "--start-file", join(exp, "build-start.json"), "--output", join(exp, "build.json"), "--timeout-seconds", "900", "--poll-seconds", "2"],
-      join(logs, "wait-build.log"),
-    );
-    this.script("codebuild", ["stop", "--start-file", join(exp, "build-start.json")], join(logs, "stop-build.log"));
-    mkdirSync(join(exp, "results"));
-    result.steps.download = this.script(
-      "s3results",
-      ["download", "--prefix", `${resultPrefix}runner/`, "--dest", join(exp, "results")],
-      join(logs, "download.log"),
-    );
-    result.steps.collect = this.script(
-      "collect",
-      [
-        "--snapshot", join(exp, "snapshot.json"),
-        "--result-dir", join(exp, "results"),
-        "--build", join(exp, "build.json"),
-        "--output", join(exp, "infrastructure.json"),
-        "--logs-output", join(exp, "ecs-logs.json"),
-        "--drain-timeout-seconds", "30",
-        "--drain-poll-seconds", "2",
-      ],
-      join(logs, "collect.log"),
-    );
-    if (existsSync(join(exp, "build.json"))) {
-      result.build = readJsonFile(join(exp, "build.json"));
-    }
-    result.runnerFiles = existsSync(join(exp, "results")) ? readdirSync(join(exp, "results")).sort() : [];
-  }
-
-  private combine(exp: string, logs: string, result: PipelineResult): void {
-    result.steps.combine = this.script(
-      "combine",
-      [
-        "--snapshot", join(exp, "snapshot.json"),
-        "--result-dir", join(exp, "results"),
-        "--build", join(exp, "build.json"),
-        "--infrastructure", join(exp, "infrastructure.json"),
-        "--preflight", join(exp, "preflight.json"),
-        "--output", join(exp, "final.json"),
-        "--summary", join(exp, "summary.md"),
-      ],
-      join(logs, "combine.log"),
-    );
-    result.final = readJsonFile(join(exp, "final.json"));
-  }
-
   private record(exp: string): string {
     const record = join(exp, "record");
     mkdirSync(record, { recursive: true });
@@ -619,30 +737,6 @@ export class Pipeline {
       cpSync(join(exp, "summary.md"), join(record, "summary.md"));
     }
     return record;
-  }
-
-  private destroy(exp: string, logs: string, flags: string[], extraEnv: Record<string, string>, result: PipelineResult): void {
-    const destroy = this.workspace.terraform(
-      "performance-experiment",
-      ["destroy", "-input=false", "-auto-approve", "-no-color", "-lock-timeout=5m", ...flags],
-      { extraEnv, log: join(logs, "destroy.log"), check: false },
-    );
-    result.steps.destroy = destroy.status;
-    const state = this.workspace.terraform("performance-experiment", ["state", "list"], {
-      log: join(logs, "state.log"),
-      check: false,
-    });
-    writeFileSync(
-      join(exp, "state-after-destroy.txt"),
-      state.status === 0 ? state.stdout : "state list could not be read\n",
-      "utf-8",
-    );
-    const args = ["--state-list", join(exp, "state-after-destroy.txt"), "--output", join(exp, "destroy-verification.json")];
-    if (existsSync(join(exp, "snapshot.json"))) {
-      args.push("--snapshot", join(exp, "snapshot.json"));
-    }
-    result.steps.verify_destroy = this.script("verify_destroyed", args, join(logs, "verify-destroy.log"));
-    result.destroyVerification = readJsonFile(join(exp, "destroy-verification.json"));
   }
 }
 
@@ -746,13 +840,33 @@ export class Environment {
         left.push(`security group ${group.GroupName}`);
       }
     }
-    const containers = run(["docker", "ps", "--all", "--format", "{{.Names}}"], { check: false }).stdout.split(/\s+/);
-    for (const name of containers) {
-      if (name.startsWith("floci-aws-ecs-") || name.startsWith("floci-aws-sagemaker-endpoint-")) {
+    // Only containers of this run's Floci namespace count; other Floci containers on the host are not ours.
+    for (const { name } of this.floci.childContainers()) {
+      if (/(^|-)(ecs|sagemaker)-/.test(name)) {
         left.push(`container ${name}`);
       }
     }
     return left;
+  }
+
+  /**
+   * Rendered JSON size of the experiment managed policies and the boundary, read from the
+   * performance-base state. IAM counts managed policy size without whitespace; the limit is 6144.
+   */
+  policySizes(): Record<string, number> {
+    const workspace = this.workspace as Workspace;
+    const state = JSON.parse(
+      workspace.terraform("performance-base", ["show", "-json"], {
+        log: join(this.artifactsDir, "setup", "performance-base-show.log"),
+      }).stdout,
+    ) as Dict;
+    const sizes: Record<string, number> = {};
+    for (const resource of state.values?.root_module?.resources ?? []) {
+      if (resource.type === "aws_iam_policy" && EXPERIMENT_POLICIES.includes(resource.name)) {
+        sizes[resource.name] = String(resource.values.policy).replace(/\s/g, "").length;
+      }
+    }
+    return sizes;
   }
 
   /** Number of Runner builds ever started in the CodeBuild projects. */
