@@ -191,3 +191,31 @@ export async function runWorkflow(
   }
   return report;
 }
+
+/** Why a run failed: the first failing step's error comes first, later failures are appended. */
+export class RunFailure extends Error {
+  override name = "RunFailure";
+  readonly errors: readonly StepError[];
+
+  constructor(errors: readonly StepError[]) {
+    const [first, ...later] = errors;
+    const lines = [`${first.step}: ${describe(first.error)}`];
+    if (later.length > 0) {
+      lines.push("Later failures, which do not replace the one above:");
+      lines.push(...later.map((item) => `- ${item.step}: ${describe(item.error)}`));
+    }
+    super(lines.join("\n"), { cause: first.error });
+    this.errors = errors;
+  }
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Throw a RunFailure when a step threw an error; the original error stays its cause. */
+export function throwIfFailed(report: RunReport): void {
+  if (report.errors.length > 0) {
+    throw new RunFailure(report.errors);
+  }
+}

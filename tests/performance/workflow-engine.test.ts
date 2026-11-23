@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { evaluateIf, loadWorkflow, NOT_SIMULATED_STEPS as NOT_SIMULATED, runWorkflow, RunState, workflowSteps } from "./workflow.ts";
+import { evaluateIf, loadWorkflow, NOT_SIMULATED_STEPS as NOT_SIMULATED, RunFailure, runWorkflow, RunState, throwIfFailed, workflowSteps } from "./workflow.ts";
 import type { Action, RunReport, Workflow } from "./workflow.ts";
 
 const OK = { ok: true };
@@ -206,5 +206,69 @@ describe("runWorkflow with the performance experiment workflow", () => {
     const { actions } = fakeActions(workflow);
     delete actions["Terraform apply"];
     await assert.rejects(runWorkflow(workflow, actions, new Set([...NOT_SIMULATED, "Terraform apply"])), /has an id/);
+  });
+});
+
+describe("RunFailure", () => {
+  const workflow = loadWorkflow();
+  const failing = (errors: Record<string, Error>) =>
+    Object.fromEntries(
+      Object.entries(errors).map(([step, error]) => [
+        step,
+        async (): Promise<never> => {
+          throw error;
+        },
+      ]),
+    );
+
+  it("throws the original error first and appends a failing destroy", async () => {
+    const original = new Error("terraform apply failed: quota exceeded");
+    const destroyFailure = new Error("destroy timed out");
+    const { actions } = fakeActions(workflow, failing({ "Terraform apply": original, "Terraform destroy": destroyFailure }));
+    const report = await runWorkflow(workflow, actions, NOT_SIMULATED);
+    assert.throws(
+      () => throwIfFailed(report),
+      (thrown: unknown) => {
+        assert.ok(thrown instanceof RunFailure);
+        assert.equal(thrown.cause, original);
+        const lines = thrown.message.split("\n");
+        assert.equal(lines[0], "Terraform apply: terraform apply failed: quota exceeded");
+        assert.ok(thrown.message.includes("- Terraform destroy: destroy timed out"));
+        assert.equal(thrown.errors.length, 2);
+        return true;
+      },
+    );
+  });
+
+  it("reports a destroy error when nothing failed before it", async () => {
+    const destroyFailure = new Error("destroy timed out");
+    const { actions } = fakeActions(workflow, failing({ "Terraform destroy": destroyFailure }));
+    const report = await runWorkflow(workflow, actions, NOT_SIMULATED);
+    assert.throws(
+      () => throwIfFailed(report),
+      (thrown: unknown) => thrown instanceof RunFailure && thrown.cause === destroyFailure,
+    );
+  });
+
+  it("keeps the original error when the verification fails after a failing destroy", async () => {
+    const original = new Error("snapshot could not be read");
+    const { actions } = fakeActions(
+      workflow,
+      failing({
+        "Export the infrastructure snapshot": original,
+        "Terraform destroy": new Error("destroy failed"),
+        "Verify the experiment layer is gone": new Error("verification failed"),
+      }),
+    );
+    const report = await runWorkflow(workflow, actions, NOT_SIMULATED);
+    assert.throws(
+      () => throwIfFailed(report),
+      (thrown: unknown) => thrown instanceof RunFailure && thrown.cause === original && thrown.errors.length === 3,
+    );
+  });
+
+  it("does not throw when no step threw", async () => {
+    const { actions } = fakeActions(workflow, { "Terraform destroy": FAILED });
+    throwIfFailed(await runWorkflow(workflow, actions, NOT_SIMULATED));
   });
 });
