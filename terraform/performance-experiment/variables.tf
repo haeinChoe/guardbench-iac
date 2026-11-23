@@ -174,9 +174,23 @@ variable "app_image_tag" {
   }
 }
 
+variable "app_image_repository_url" {
+  description = "Image repository URL for the Backend image; null uses the shared ECR repository"
+  type        = string
+  default     = null
+  nullable    = true
+}
+
 # ============================================
 # Performance SageMaker Classifier 설정
 # ============================================
+variable "performance_sagemaker_container_image" {
+  description = "Serving container image for the classifier model; null uses the pinned DJL LMI image for the region"
+  type        = string
+  default     = null
+  nullable    = true
+}
+
 variable "performance_sagemaker_instance_type" {
   description = "SageMaker ML instance type for the dedicated performance classifier endpoint"
   type        = string
@@ -222,6 +236,13 @@ variable "demo_ai_image_tag" {
     condition     = can(regex("^[0-9a-f]{7,64}$", var.demo_ai_image_tag))
     error_message = "demo_ai_image_tag must be a verified Git commit SHA; mutable tags such as latest are not allowed."
   }
+}
+
+variable "demo_ai_image_repository_url" {
+  description = "Image repository URL for the Demo AI image; null uses the shared Demo AI ECR repository"
+  type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "demo_ai_target_model" {

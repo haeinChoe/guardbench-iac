@@ -84,9 +84,11 @@ terraform apply tfplan
     - `job_workflow_ref` = `haeinChoe/guardbench-iac/<performance_experiment_workflow_path>@<performance_experiment_workflow_ref>` (기본 `.github/workflows/performance-experiment.yml`, `refs/heads/dev`)
     - `repository_id` = `performance_experiment_github_repository_id` (기본 `1387017401`)
   - 진입점 workflow job은 `environment: performance-experiment`를 사용해야 하며, GitHub repository 설정에서 `performance-experiment` environment의 deployment branch를 `dev`로 제한해야 합니다.
+  - role의 최대 세션은 10시간(36000초)입니다. workflow는 apply와 Runner build 대기를 덮는 첫 세션을 10시간으로 받고, 정리 단계 앞에서 2시간짜리 세션으로 갱신합니다.
   - 실험 IAM role은 permissions boundary(`experiment_permissions_boundary_arn`, 정책 `<project>-<environment>-perf-experiment-boundary`)를 가진 경우에만 만들거나 권한을 붙일 수 있습니다. `iam:CreateRole`, `iam:PutRolePolicy`, `iam:AttachRolePolicy`, `iam:PutRolePermissionsBoundary`는 `iam:PermissionsBoundary`가 이 boundary ARN일 때만 허용하고, `iam:DeleteRolePermissionsBoundary`와 boundary 정책 자체의 변경·삭제(`iam:CreatePolicyVersion`, `iam:SetDefaultPolicyVersion`, `iam:DeletePolicy`, `iam:DeletePolicyVersion`)는 명시적으로 Deny합니다.
   - boundary는 실험 role이 가질 수 있는 최대 권한(ECR pull, 실험 로그 그룹 쓰기, Performance RDS secret 읽기, 성능 SageMaker endpoint 호출, 성능 SQS 사용, ECS Exec 채널, Demo AI의 Bedrock 호출, SageMaker 실행 role의 모델 artifact 읽기·endpoint 로그 쓰기)입니다. `performance-experiment` root의 모든 IAM role은 `permissions_boundary`로 이 값을 받아야 합니다.
   - `performance-experiment` state 읽기·쓰기와 실험 층 자원(ECS·SageMaker·IAM PassRole 범위 제한·Logs·실험용 SG/규칙) apply/destroy, Runner CodeBuild 시작·중지·조회, 결과 S3, 성능 CloudWatch 지표·로그·SQS·RDS 조회만 허용하며 dev 자원 ARN은 포함하지 않습니다.
+  - 권한은 customer managed policy 두 개(`<project>-<environment>-perf-experiment-gha-state-lifecycle`, `<project>-<environment>-perf-experiment-gha-logs-network-run`)로 나누어 role에 붙입니다. 하나로 합친 문서가 role 인라인 정책 한도(공백 제외 10,240자, 합친 문서 약 10,687자)를 넘기 때문입니다. 두 정책의 크기는 각각 5,743자와 4,944자로 managed policy 한도(6,144자) 안입니다. 권한을 추가할 때 이 크기를 다시 확인합니다.
 
 ### `performance-experiment`
 
@@ -95,7 +97,17 @@ terraform apply tfplan
 - dev와 분리된 성능 전용 SageMaker classifier endpoint(`guardbench-<env>-performance-qwen3-4b-endpoint`)와 Synthetic Demo AI Application Target ECS Service(`demo_ai_desired_count`, `demo_ai_target_model`, 지정된 `demo_ai_bedrock_resource_arns`에 대한 `bedrock:InvokeModel` 허용)를 생성·관리합니다.
 - Performance API·Worker 컨테이너에는 Internal Performance ALB 호스트명(`allowed-private-hostnames`)과 Performance RDS/SQS·전용 SageMaker endpoint 연결 정보가 주입됩니다.
 - SageMaker model 이름은 접두사(`<project>-<environment>-perf-qwen3-4b-`)와 model 정의 해시 12자리로 만듭니다(`aws_sagemaker_model`은 `name_prefix`를 지원하지 않음). 정의가 바뀌면 이름이 달라져 새 model을 먼저 만든 뒤 이전 model을 삭제합니다. 이 root가 만드는 IAM role 5개(API·Worker task, exec, SageMaker 실행, Demo AI exec·task)는 모두 `performance-base`의 `experiment_permissions_boundary_arn`을 `permissions_boundary`로 가집니다.
-- `infrastructure_snapshot` output으로 구성 ID, `infrastructure_revision`(40자리 소문자 hex commit SHA), 기대 capacity, 실제 AWS 자원 식별자, `api_url`, `target` 연결 정보(`type`, `url`, `model`, `revision`)를 내보냅니다. 기반 층 RDS 등급과 실제 상태 대조는 실험 진입점이 수행합니다.
+- `infrastructure_snapshot` output으로 구성 ID, `infrastructure_revision`(40자리 소문자 hex commit SHA), 기대 capacity, 실제 AWS 자원 식별자, Runner 실행 대상(`resources.runner`: CodeBuild 프로젝트 이름, 결과 S3 버킷), `api_url`, `target` 연결 정보(`type`, `url`, `model`, `revision`)를 내보냅니다. 기반 층 RDS 등급과 실제 상태 대조는 실험 진입점이 수행합니다.
+- Backend·Demo AI 이미지 저장소(`app_image_repository_url`, `demo_ai_image_repository_url`)와 SageMaker 서빙 컨테이너 이미지(`performance_sagemaker_container_image`)는 기본값(`null`)에서 기존 출처(shared ECR, 고정 DJL 이미지)를 씁니다. 로컬에서 받을 수 없는 이미지를 대체 이미지로 바꿔 파이프라인을 시험할 때만 지정합니다.
+
+## 성능 실험 진입점과 Floci 파이프라인 테스트
+
+- 실험 하나의 실행은 [`Performance Experiment` workflow](../.github/workflows/performance-experiment.yml)가 지휘합니다. 입력·순서·판정·결과 위치는 [성능 실험 실행 안내](../docs/performance-experiment.md)를 따릅니다.
+- `scripts/performance/`의 CLI는 workflow와 테스트가 같은 코드를 씁니다. TypeScript(Node 24, 빌드 없이 `node scripts/performance/<이름>.ts`로 실행)와 AWS SDK v3로 작성되어 있고, AWS 접속 정보는 SDK 기본 동작(환경 변수 `AWS_ENDPOINT_URL` 등)으로만 정해지며 코드에 에뮬레이터 분기는 없습니다. 의존성은 `package-lock.json`에 정확한 버전으로 고정합니다. 타입 검사와 단위 테스트: `npm ci && npm run typecheck && npm test`
+- Floci 파이프라인 테스트(`tests/floci`)는 apply → 실행 전 확인 → CodeBuild buildspec 실행 → 수집·결합 → destroy를 Floci(`floci/floci:2.4.0`) 위에서 실행합니다. Docker와 Terraform이 필요합니다: `npm run test:floci`.
+  - 더미 자격 증명과 loopback endpoint만 쓰고 `~/.aws`는 읽지 않습니다. 실제 원격 backend로 `terraform init`을 하지 않습니다.
+  - Terraform의 backend·provider endpoint·`terraform_remote_state` 전환은 테스트가 임시 복사본에 쓰는 `override.tf`로만 합니다. root 코드에는 에뮬레이터 분기가 없습니다.
+  - 이 테스트는 단계 순서와 결과 수집을 확인합니다. IAM 권한 충분성, GitHub OIDC 신뢰, 보안 그룹·네트워크 격리, 성능 수치는 재현하지 않으므로 첫 실제 apply에서 확인합니다.
 
 ## 보안 및 Secret 관리 원칙
 

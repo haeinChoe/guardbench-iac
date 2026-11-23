@@ -201,6 +201,10 @@ output "infrastructure_snapshot" {
         endpoint_arn            = aws_sagemaker_endpoint.performance_classifier.arn
         production_variant_name = local.performance_sagemaker_variant_name
       }
+      runner = {
+        codebuild_project_name = data.terraform_remote_state.performance_base.outputs.performance_codebuild_project_name
+        results_bucket_name    = data.terraform_remote_state.performance_base.outputs.performance_results_bucket_name
+      }
       sqs = {
         source_queue_urls  = data.terraform_remote_state.performance_base.outputs.performance_sqs_queue_urls
         source_queue_names = data.terraform_remote_state.performance_base.outputs.performance_sqs_queue_names

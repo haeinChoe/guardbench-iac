@@ -1,0 +1,4 @@
+id: fixture-pass
+type: SMOKE
+outcome: PASS
+concurrent_test_runs: 2

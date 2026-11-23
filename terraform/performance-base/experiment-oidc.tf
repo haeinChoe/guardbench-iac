@@ -85,10 +85,11 @@ data "aws_iam_policy_document" "performance_experiment_assume_role" {
 }
 
 resource "aws_iam_role" "performance_experiment_github_actions" {
-  name                 = "${var.project}-${var.environment}-perf-experiment-gha-role"
-  description          = "Run performance experiment lifecycle from guardbench-iac entrypoint workflow via GitHub OIDC"
-  assume_role_policy   = data.aws_iam_policy_document.performance_experiment_assume_role.json
-  max_session_duration = 7200
+  name               = "${var.project}-${var.environment}-perf-experiment-gha-role"
+  description        = "Run performance experiment lifecycle from guardbench-iac entrypoint workflow via GitHub OIDC"
+  assume_role_policy = data.aws_iam_policy_document.performance_experiment_assume_role.json
+  # Must cover apply plus the Runner build wait (the workflow job timeout is 600 minutes).
+  max_session_duration = 36000
 
   tags = {
     Name        = "${var.project}-${var.environment}-perf-experiment-gha-role"
@@ -97,7 +98,12 @@ resource "aws_iam_role" "performance_experiment_github_actions" {
   }
 }
 
-data "aws_iam_policy_document" "performance_experiment" {
+# The permissions are split across two customer managed policies attached to the role:
+# IAM caps one managed policy at 6,144 characters and the inline policies of a role at
+# 10,240 characters in total, and the combined document is larger than either limit.
+# Policy "state_and_lifecycle" covers Terraform state, ECS, SageMaker and IAM; policy
+# "logs_network_and_run" covers logs, security groups, CodeBuild, results and observation.
+data "aws_iam_policy_document" "performance_experiment_state_and_lifecycle" {
   # Remote state access: shared & performance-base read-only, performance-experiment read-write.
   statement {
     sid    = "ListStateBucketForExperiment"
@@ -311,7 +317,9 @@ data "aws_iam_policy_document" "performance_experiment" {
       values   = ["sagemaker.amazonaws.com"]
     }
   }
+}
 
+data "aws_iam_policy_document" "performance_experiment_logs_network_and_run" {
   # CloudWatch Logs management for experiment services and query access including CodeBuild logs.
   statement {
     sid    = "DescribeLogGroupsAndQueries"
@@ -525,8 +533,36 @@ data "aws_iam_policy_document" "performance_experiment" {
   }
 }
 
-resource "aws_iam_role_policy" "performance_experiment_github_actions" {
-  name   = "${var.project}-${var.environment}-perf-experiment-gha-policy"
-  role   = aws_iam_role.performance_experiment_github_actions.id
-  policy = data.aws_iam_policy_document.performance_experiment.json
+resource "aws_iam_policy" "performance_experiment_state_and_lifecycle" {
+  name        = "${var.project}-${var.environment}-perf-experiment-gha-state-lifecycle"
+  description = "Performance experiment entrypoint: Terraform state, ECS, SageMaker and boundary-gated IAM"
+  policy      = data.aws_iam_policy_document.performance_experiment_state_and_lifecycle.json
+
+  tags = {
+    Name        = "${var.project}-${var.environment}-perf-experiment-gha-state-lifecycle"
+    Environment = "performance"
+    Purpose     = "performance-testing"
+  }
+}
+
+resource "aws_iam_policy" "performance_experiment_logs_network_and_run" {
+  name        = "${var.project}-${var.environment}-perf-experiment-gha-logs-network-run"
+  description = "Performance experiment entrypoint: logs, security groups, CodeBuild, results and observation"
+  policy      = data.aws_iam_policy_document.performance_experiment_logs_network_and_run.json
+
+  tags = {
+    Name        = "${var.project}-${var.environment}-perf-experiment-gha-logs-network-run"
+    Environment = "performance"
+    Purpose     = "performance-testing"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "performance_experiment_state_and_lifecycle" {
+  role       = aws_iam_role.performance_experiment_github_actions.name
+  policy_arn = aws_iam_policy.performance_experiment_state_and_lifecycle.arn
+}
+
+resource "aws_iam_role_policy_attachment" "performance_experiment_logs_network_and_run" {
+  role       = aws_iam_role.performance_experiment_github_actions.name
+  policy_arn = aws_iam_policy.performance_experiment_logs_network_and_run.arn
 }

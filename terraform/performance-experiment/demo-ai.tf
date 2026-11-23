@@ -106,7 +106,7 @@ resource "aws_ecs_task_definition" "demo_ai" {
 
   container_definitions = jsonencode([{
     name      = "demo-ai"
-    image     = "${data.terraform_remote_state.shared.outputs.demo_ai_ecr_repository_url}:${var.demo_ai_image_tag}"
+    image     = "${coalesce(var.demo_ai_image_repository_url, data.terraform_remote_state.shared.outputs.demo_ai_ecr_repository_url)}:${var.demo_ai_image_tag}"
     essential = true
 
     portMappings = [{

@@ -1,7 +1,7 @@
 locals {
   backend_container_base = {
     name      = "app"
-    image     = "${data.terraform_remote_state.shared.outputs.ecr_repository_url}:${var.app_image_tag}"
+    image     = "${coalesce(var.app_image_repository_url, data.terraform_remote_state.shared.outputs.ecr_repository_url)}:${var.app_image_tag}"
     essential = true
 
     portMappings = [{
