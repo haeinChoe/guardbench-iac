@@ -5,13 +5,13 @@ body:
   - type: markdown
     attributes:
       value: |
-        제안은 승인된 계약이나 구현 권한이 아닙니다. 결정은 필요할 때 ADR 또는 승인된 IaC 문서로 기록합니다.
+        결론부터 간결하게 씁니다. 제안은 승인된 계약이나 구현 권한이 아니며, 승인된 결정은 `docs/decisions/`의 ADR로 남깁니다.
 
   - type: textarea
     id: context
     attributes:
       label: 배경과 문제
-      description: 어떤 운영 문제와 제약 때문에 지금 결정이 필요한지 적어주세요.
+      description: 어떤 문제와 제약 때문에 지금 결정이 필요한지 적어주세요.
     validations:
       required: true
 
@@ -19,7 +19,7 @@ body:
     id: contracts
     attributes:
       label: 관련 계약과 선행 결정
-      description: Terraform 파일, README, 승인된 Issue/PR과 Backend 연동 계약을 적습니다.
+      description: Terraform 파일, `docs/decisions/`의 ADR, 문서 경로와 상태(APPROVED/DRAFT), 승인된 Issue/PR과 Backend 연동 계약을 적습니다. Notion은 참고 링크로 구분합니다.
     validations:
       required: true
 
@@ -27,7 +27,7 @@ body:
     id: drivers
     attributes:
       label: 결정 기준과 제약
-      description: 보안, 비용, 가용성, 운영 복잡도, State lifecycle과 rollback 등 평가 기준을 적어주세요.
+      description: 보안, 비용, 가용성, 운영 복잡도, State lifecycle, 계정 확보 여부에 따른 검증 가능 범위와 rollback 등 평가 기준을 적어주세요.
     validations:
       required: true
 
@@ -35,7 +35,7 @@ body:
     id: options
     attributes:
       label: 선택지와 장단점
-      description: 현실적인 대안을 둘 이상 비교하고 아무것도 바꾸지 않는 선택도 포함해 주세요.
+      description: 현실적인 대안을 둘 이상 비교하고, 가능하면 아무것도 바꾸지 않는 선택도 포함합니다.
     validations:
       required: true
 
@@ -51,7 +51,7 @@ body:
     id: impact
     attributes:
       label: 영향, 검증과 되돌리기
-      description: Plan, State, AWS 비용과 운영 영향, 성공 기준 및 rollback 방법을 적습니다.
+      description: 영향받는 Terraform root(shared, dev, performance-base, performance-experiment)와 state key, IAM 정책 크기·permissions boundary, AWS 비용과 운영 영향, 성공 기준, 실패 신호와 rollback 방법을 적습니다. plan은 계정 확보 전 미실행일 수 있으므로 검증 가능한 범위를 구분합니다.
     validations:
       required: true
 
@@ -59,15 +59,15 @@ body:
     id: open_questions
     attributes:
       label: 미결정 사항과 필요한 승인자
-      description: 추가 조사, 선행 결정, 결정권자와 목표 시점을 적습니다. 없으면 "없음"으로 작성합니다.
+      description: 추가 조사, 의존 결정, 결정권자와 목표 시점을 적습니다. 없으면 "없음"으로 작성합니다.
     validations:
       required: true
 
   - type: input
     id: branch_slug
     attributes:
-      label: 브랜치 slug
-      description: 결정 승인 후 agent/{issue-number}-{slug} 브랜치 이름에 사용합니다.
+      label: ADR 브랜치 slug
+      description: 승인 후 agent/{issue-number}-{slug} 브랜치와 전용 worktree에 사용합니다.
       placeholder: choose-runner-execution-path
     validations:
       required: true
@@ -77,5 +77,5 @@ body:
     attributes:
       label: 결정 경계 확인
       options:
-        - label: 승인 전에는 확정된 인프라 계약으로 사용하지 않고 구현과 분리해 기록합니다.
+        - label: 승인 전에는 확정 계약으로 사용하지 않고, 승인 후 ADR과 별도 구현 Issue로 추적합니다.
           required: true

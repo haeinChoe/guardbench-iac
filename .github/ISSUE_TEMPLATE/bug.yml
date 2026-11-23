@@ -19,7 +19,7 @@ body:
       required: true
 
   - type: dropdown
-    id: impact
+    id: severity
     attributes:
       label: 영향도
       options:
@@ -73,6 +73,22 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: affected_roots
+    attributes:
+      label: 영향 root
+      description: 변경이 닿는 Terraform root와 영역을 모두 선택합니다.
+      multiple: true
+      options:
+        - terraform/shared
+        - terraform/dev
+        - terraform/performance-base
+        - terraform/performance-experiment (presets 포함)
+        - workflow·scripts (.github/workflows, scripts, tests, buildspec)
+        - 문서만
+    validations:
+      required: true
+
   - type: textarea
     id: scope
     attributes:
@@ -95,8 +111,12 @@ body:
       label: 완료 조건과 회귀 검증
       placeholder: |
         - [ ] 재현 조건에서 오류가 해결된다.
-        - [ ] terraform fmt -check와 terraform validate가 통과한다.
-        - [ ] plan에 의도하지 않은 resource 변경이 없다.
+        - [ ] terraform fmt -check -recursive가 통과한다.
+        - [ ] 영향 root(shared, dev, performance-base, performance-experiment)마다 terraform init -backend=false && terraform validate가 통과한다.
+        - [ ] terraform plan의 add/change/destroy가 요구사항과 일치한다. AWS 계정 확보 전에는 미실행과 사유를 기록한다.
+        - [ ] scripts 변경 시 npm run typecheck와 npm test가 통과한다.
+        - [ ] workflow 변경 시 actionlint가 통과한다.
+        - [ ] 실험 층, workflow, scripts 또는 buildspec 변경 시 npm run test:floci가 통과한다.
     validations:
       required: true
 
@@ -107,7 +127,7 @@ body:
       description: State, resource 교체/삭제, IAM, network, 비용과 rollback 영향을 적습니다.
       placeholder: |
         - State/resource:
-        - IAM/network:
+        - IAM(정책 크기 한도, permissions boundary)/network:
         - 비용/Region:
         - Replacement/destroy:
         - 실제 apply 승인:
@@ -127,11 +147,12 @@ body:
     id: agent_permission
     attributes:
       label: 에이전트 작업 범위
-      description: Issue 자체는 push, PR, 병합, AWS apply 또는 force push 권한을 주지 않습니다.
+      description: 선택한 작업 범위만 허용됩니다. push와 PR 생성 선택값에도 병합, AWS apply와 force push 권한은 포함되지 않습니다.
       options:
-        - 검증된 로컬 커밋까지 허용
-        - 파일 수정과 검증까지 허용 — 커밋 금지
         - 조사와 진단만 허용 — 파일 변경 금지
+        - 파일 수정과 검증까지 허용 — 커밋 금지
+        - 검증된 로컬 커밋까지 허용
+        - 검증된 로컬 커밋 및 push·PR 생성까지 허용 — 병합 금지
     validations:
       required: true
 
